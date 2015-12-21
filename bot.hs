@@ -138,27 +138,6 @@ listen config network tchan h = forever $ do
         ping x    = "PING :" `isPrefixOf` x
         pong x    = write h "PONG" (':' : drop 6 x)
 
--- Notify the IssueEvent to all interested channels on the given network
--- TODO: Currently, this only notifies exactly one channel
-notify_issue :: Config.Network -> Github.IssueEvent -> Handle -> IO ()
-notify_issue network event h = maybe (return ()) (\actual_chan -> privmsg h actual_chan $ sender ++ " " ++ action ++ " issue #" ++ issue_id ++ ": \"" ++ title ++ "\" --- " ++ url) maybe_actual_chan
-    where
-        actual_chan_name = repository_id_to_chan $ Github.repoId $ Github.issueEventRepository event
-        maybe_actual_chan = lookup_channel_in_network network actual_chan_name
-        issue = Github.issueEventIssue event
-        title = T.unpack $ Github.issueTitle issue
-        issue_id = show $ Github.issueNumber issue
-        comment = T.unpack $ Github.issueBody issue
-        sender_user = Github.issueEventSender event
-        sender = T.unpack $ Github.userLogin $ sender_user
-        url = B.unpack $ Github.issueHtmlUrl issue
-        action = T.unpack $ Github.issueEventAction event
-
-repository_id_to_chan :: Int -> String
-repository_id_to_chan 35845931 = "#wiiu-emu"
-repository_id_to_chan 48068487 = "#neobot"
-repository_id_to_chan _ = "#citra"
-
 lookup_channel_in_network :: Config.Network -> String -> Maybe Config.Channel
 lookup_channel_in_network network channel = find ((channel==) . T.unpack . Config.channelName) $ Config.networkChannels network
 
@@ -171,14 +150,42 @@ lookup_channel_in_config config network channel =
 lookup_network_in_config :: Config.Config -> String -> Maybe Config.Network
 lookup_network_in_config config network = find ((network==) . T.unpack . Config.networkName) $ Config.configNetworks config
 
--- Notify the IssueCommentEvent to all interested channels on the given network
--- TODO: Currently, this only notifies exactly one channel
-notify_issue_comment :: Config.Network -> Github.IssueCommentEvent -> Handle -> IO ()
-notify_issue_comment network event h = maybe (return ()) (\actual_chan -> privmsg h actual_chan $ "New comment on issue #" ++ issue_id ++ " by " ++ author ++ ": \"" ++ body ++ "\" --- " ++ url) maybe_actual_chan
+-- Get a list of all channels in the given network which observe the given GitHub repository
+getChannelsObservingRepo :: Config.Network -> Github.Repository -> [Config.Channel]
+getChannelsObservingRepo network repo = filter channel_observing all_channels
     where
+        -- Assume the repository name is build like "owner/name"
+        repo_full_name = break (=='/') (T.unpack $ Github.repoFullName repo)
+        repo_owner = fst repo_full_name
+        repo_name = drop 1 $ snd repo_full_name
+        all_channels = Config.networkChannels network
+        -- TODO: Can we define this predicate more nicely?
+        channel_observing chan = ((Just $ T.pack repo_owner) == (Config.channelWatchedGithubRepoOwner chan)) && ((Just $ T.pack repo_name) == (Config.channelWatchedGithubRepo chan))
+
+-- Notify the IssueEvent to all interested channels on the given network
+notify_issue :: Config.Network -> Github.IssueEvent -> Handle -> IO ()
+notify_issue network event h = forM_ filtered_channels send_notification
+    where
+        send_notification chan = privmsg h chan $ sender ++ " " ++ action ++ " issue #" ++ issue_id ++ ": \"" ++ title ++ "\" --- " ++ url
+        repo = Github.issueEventRepository event
+        filtered_channels = getChannelsObservingRepo network repo
+        issue = Github.issueEventIssue event
+        title = T.unpack $ Github.issueTitle issue
+        issue_id = show $ Github.issueNumber issue
+        comment = T.unpack $ Github.issueBody issue
+        sender_user = Github.issueEventSender event
+        sender = T.unpack $ Github.userLogin $ sender_user
+        url = B.unpack $ Github.issueHtmlUrl issue
+        action = T.unpack $ Github.issueEventAction event
+
+-- Notify the IssueCommentEvent to all interested channels on the given network
+notify_issue_comment :: Config.Network -> Github.IssueCommentEvent -> Handle -> IO ()
+notify_issue_comment network event h = forM_ filtered_channels send_notification
+    where
+        send_notification chan = privmsg h chan $ author ++ " commented on issue #" ++ issue_id ++ ": \"" ++ body ++ "\" --- " ++ url
+        repo = Github.issueCommentEventRepository event
+        filtered_channels = getChannelsObservingRepo network repo
         issue = Github.issueCommentEventIssue event
-        actual_chan_name = repository_id_to_chan $ Github.repoId $ Github.issueCommentEventRepository event
-        maybe_actual_chan = lookup_channel_in_network network actual_chan_name
         issue_id = show $ Github.issueNumber issue
         comment = Github.issueCommentEventComment event
         author_user = Github.commentUser comment
@@ -186,13 +193,13 @@ notify_issue_comment network event h = maybe (return ()) (\actual_chan -> privms
         body = take 100 $ head $ lines $ T.unpack $ Github.commentBody comment
         url = B.unpack $ Github.commentHtmlUrl comment
 
--- Notify the PushEvent to all interested channels on the given network
--- TODO: Currently, this only notifies exactly one channel
+-- Notify the PushEvent's commit to all interested channels on the given network
 notify_commit :: Config.Network -> Github.PushEvent -> Github.Commit -> Handle -> IO ()
-notify_commit network pushevent commit h = maybe (return ()) (\actual_chan -> privmsg h actual_chan $ "New patch by " ++ author ++ ": " ++ message ++ " (" ++ url ++ ")") maybe_actual_chan
+notify_commit network event commit h = forM_ filtered_channels send_notification
     where
-        actual_chan_name = repository_id_to_chan $ Github.repoId $ Github.pushEventRepository pushevent
-        maybe_actual_chan = lookup_channel_in_network network actual_chan_name
+        send_notification chan = privmsg h chan $ "New patch by " ++ author ++ ": " ++ message ++ " (" ++ url ++ ")"
+        repo = Github.pushEventRepository event
+        filtered_channels = getChannelsObservingRepo network repo
         author = T.unpack $ Github.simpleUserName $ Github.commitCommitter commit
         message = T.unpack $ Github.commitMessage commit
         url = B.unpack $ Github.commitUrl commit
