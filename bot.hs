@@ -72,7 +72,7 @@ main = do
                          let -- githubChans = HM.fromList $ map (,(atomically newTChan)) $ networks_channels_list
                              networks_channels_list = concat $ map (\network -> map (network,) (Config.networkChannels network)) (Config.configNetworks config)
                              watching_channels = filter (watches_some_repo . snd) networks_channels_list
-                             watches_some_repo = \channel -> all isJust [Config.channelWatchedGithubRepoOwner channel, Config.channelWatchedGithubRepo channel]
+                             watches_some_repo = null . Config.channelWatchedGithubRepos
 
                          --githubChans <- do
                          --           -- tchans <- sequence $ repeat $ atomically $ newTChan
@@ -154,13 +154,13 @@ lookup_network_in_config config network = find ((network==) . T.unpack . Config.
 getChannelsObservingRepo :: Config.Network -> Github.Repository -> [Config.Channel]
 getChannelsObservingRepo network repo = filter channel_observing all_channels
     where
+        all_channels = Config.networkChannels network
         -- Assume the repository name is build like "owner/name"
         repo_full_name = break (=='/') (T.unpack $ Github.repoFullName repo)
-        repo_owner = fst repo_full_name
-        repo_name = drop 1 $ snd repo_full_name
-        all_channels = Config.networkChannels network
-        -- TODO: Can we define this predicate more nicely?
-        channel_observing chan = ((Just $ T.pack repo_owner) == (Config.channelWatchedGithubRepoOwner chan)) && ((Just $ T.pack repo_name) == (Config.channelWatchedGithubRepo chan))
+        reference_watched_repo = Config.WatchedRepo
+                                 { Config.watchedRepoOwner = T.pack $ fst repo_full_name
+                                 , Config.watchedRepoName = T.pack $ drop 1 $ snd repo_full_name }
+        channel_observing = elem reference_watched_repo . Config.channelWatchedGithubRepos
 
 -- Notify the IssueEvent to all interested channels on the given network
 notify_issue :: Config.Network -> Github.IssueEvent -> Handle -> IO ()
@@ -266,8 +266,8 @@ getissue config network channel h x =
                     (Right issue) -> privmsg h channel $ "Issue " ++ show issueNum ++ ", reported by " ++ (GHAPI.githubOwnerLogin (GHAPI.issueUser issue)) ++ ": " ++ (GHAPI.issueTitle issue)
 
     where maybeIssueNum = myreadMaybe x :: Maybe Int
-          repo_owner = T.unpack $ fromJust $ Config.channelWatchedGithubRepoOwner channel -- TODO: This is unsafe!
-          repo_name = T.unpack $ fromJust $ Config.channelWatchedGithubRepo channel -- TODO: This is unsafe!
+          repo_owner = T.unpack $ Config.watchedRepoOwner $ head $ Config.channelWatchedGithubRepos channel -- TODO: This is unsafe!
+          repo_name = T.unpack $ Config.watchedRepoName $ head $ Config.channelWatchedGithubRepos channel -- TODO: This is unsafe!
           auth = Just $ GHAPI.GithubOAuth $ T.unpack $ Config.configAuthToken config
 
 -- TODO: Change to "Channel -> Handle -> String -> IO ()" for consistency!

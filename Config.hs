@@ -5,10 +5,12 @@ module Config
     ( readConfig
     , Config(..)
     , Network(..)
-    , Channel(..)) where
+    , Channel(..)
+    , WatchedRepo(..)
+    ) where
 
 import Control.Applicative ((<$>), (<*>), pure, (<|>))
-import Data.Aeson (Value (..), FromJSON (..), (.:), (.:?), Object, eitherDecode)
+import Data.Aeson (Value (..), FromJSON (..), (.:), (.:?), (.!=), Object, eitherDecode)
 import Data.Text (Text)
 
 import GHC.Generics (Generic) -- used to automatically create instances of Hashable
@@ -52,22 +54,33 @@ instance FromJSON Network where
 
 instance Hashable Network
 
-data Channel = Channel {
-    channelName :: Text
-    , channelWatchedGithubRepoOwner :: Maybe Text -- owner of the watched repo
-    , channelWatchedGithubRepo :: Maybe Text
+data Channel = Channel
+    { channelName :: Text
+    , channelWatchedGithubRepos :: [WatchedRepo]
     , channelEnableOffensiveLanguage :: Bool
     } deriving (Show, Eq, Generic)
 
 instance FromJSON Channel where
     parseJSON (Object v) =
         Channel <$> v .: "name"
-                <*> v .:? "watched_repo_owner" -- TODO: Store this in a subobject instead, so that multiple repos can be watched!
-                <*> v .:? "watched_repo"
+                <*> v .:? "watched_repos" .!= []
                 <*> v .: "offensive_language"
     parseJSON _ = fail "Channel must be an object"
 
 instance Hashable Channel
+
+data WatchedRepo = WatchedRepo
+    { watchedRepoOwner :: Text
+    , watchedRepoName :: Text
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON WatchedRepo where
+    parseJSON (Object v) =
+        WatchedRepo <$> v .: "owner"
+                    <*> v .: "name"
+    parseJSON _ = fail "WatchedRepo must be an object"
+
+instance Hashable WatchedRepo
 
 -- Mapping filename to IO action returning a Config object
 readConfig :: String -> IO (Maybe Config)
