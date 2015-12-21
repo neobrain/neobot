@@ -58,6 +58,8 @@ data Channel = Channel
     { channelName :: Text
     , channelWatchedGithubRepos :: [WatchedRepo]
     , channelEnableOffensiveLanguage :: Bool
+    , channelReplyToGreetings :: Bool
+    , channelReplyToCatchPhrases :: Bool
     } deriving (Show, Eq, Generic)
 
 instance FromJSON Channel where
@@ -65,6 +67,8 @@ instance FromJSON Channel where
         Channel <$> v .: "name"
                 <*> v .:? "watched_repos" .!= []
                 <*> v .: "offensive_language"
+                <*> v .:? "reply_to_greetings" .!= False
+                <*> v .:? "reply_to_catch_phrases" .!= False
     parseJSON _ = fail "Channel must be an object"
 
 instance Hashable Channel
