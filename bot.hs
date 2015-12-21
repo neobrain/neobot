@@ -124,9 +124,9 @@ listen config network tchan h = forever $ do
             case maybePayload of
                 Just payload -> case payload of
                     --Github.Push event -> notify_commit event (head (Github.pushEventCommits event)) h default_chan
-                    Github.Push         event -> sequence_ $ map (\commit -> notify_commit event commit h) (Github.pushEventCommits event)
-                    Github.IssueComment event -> notify_issue_comment event h
-                    Github.Issue        event -> notify_issue event h
+                    Github.Push         event -> sequence_ $ map (\commit -> notify_commit network event commit h) (Github.pushEventCommits event)
+                    Github.IssueComment event -> notify_issue_comment network event h
+                    Github.Issue        event -> notify_issue network event h
                     _                  -> print "Received payload, but not sure what to do with it!"
                 Nothing -> do
                     return ()
@@ -138,10 +138,13 @@ listen config network tchan h = forever $ do
         ping x    = "PING :" `isPrefixOf` x
         pong x    = write h "PONG" (':' : drop 6 x)
 
-notify_issue :: Github.IssueEvent -> Handle -> IO ()
-notify_issue event h = privmsg h actual_chan $ sender ++ " " ++ action ++ " issue #" ++ issue_id ++ ": \"" ++ title ++ "\" --- " ++ url
+-- Notify the IssueEvent to all interested channels on the given network
+-- TODO: Currently, this only notifies exactly one channel
+notify_issue :: Config.Network -> Github.IssueEvent -> Handle -> IO ()
+notify_issue network event h = maybe (return ()) (\actual_chan -> privmsg h actual_chan $ sender ++ " " ++ action ++ " issue #" ++ issue_id ++ ": \"" ++ title ++ "\" --- " ++ url) maybe_actual_chan
     where
-        actual_chan = repository_id_to_chan $ Github.repoId $ Github.issueEventRepository event
+        actual_chan_name = repository_id_to_chan $ Github.repoId $ Github.issueEventRepository event
+        maybe_actual_chan = lookup_channel_in_network network actual_chan_name
         issue = Github.issueEventIssue event
         title = T.unpack $ Github.issueTitle issue
         issue_id = show $ Github.issueNumber issue
@@ -156,23 +159,26 @@ repository_id_to_chan 35845931 = "#wiiu-emu"
 repository_id_to_chan 48068487 = "#neobot"
 repository_id_to_chan _ = "#citra"
 
-lookup_channel_in_network :: Config.Config -> Config.Network -> String -> Maybe Config.Channel
-lookup_channel_in_network config network channel = find ((channel==) . T.unpack . Config.channelName) $ Config.networkChannels network
+lookup_channel_in_network :: Config.Network -> String -> Maybe Config.Channel
+lookup_channel_in_network network channel = find ((channel==) . T.unpack . Config.channelName) $ Config.networkChannels network
 
 lookup_channel_in_config :: Config.Config -> String -> String -> Maybe Config.Channel
 lookup_channel_in_config config network channel =
     maybe Nothing channel_match network_match
     where network_match = lookup_network_in_config config network
-          channel_match network = lookup_channel_in_network config network channel
+          channel_match network = lookup_channel_in_network network channel
 
 lookup_network_in_config :: Config.Config -> String -> Maybe Config.Network
 lookup_network_in_config config network = find ((network==) . T.unpack . Config.networkName) $ Config.configNetworks config
 
-notify_issue_comment :: Github.IssueCommentEvent -> Handle -> IO ()
-notify_issue_comment event h = privmsg h actual_chan $ "New comment on issue #" ++ issue_id ++ " by " ++ author ++ ": \"" ++ body ++ "\" --- " ++ url
+-- Notify the IssueCommentEvent to all interested channels on the given network
+-- TODO: Currently, this only notifies exactly one channel
+notify_issue_comment :: Config.Network -> Github.IssueCommentEvent -> Handle -> IO ()
+notify_issue_comment network event h = maybe (return ()) (\actual_chan -> privmsg h actual_chan $ "New comment on issue #" ++ issue_id ++ " by " ++ author ++ ": \"" ++ body ++ "\" --- " ++ url) maybe_actual_chan
     where
         issue = Github.issueCommentEventIssue event
-        actual_chan = repository_id_to_chan $ Github.repoId $ Github.issueCommentEventRepository event
+        actual_chan_name = repository_id_to_chan $ Github.repoId $ Github.issueCommentEventRepository event
+        maybe_actual_chan = lookup_channel_in_network network actual_chan_name
         issue_id = show $ Github.issueNumber issue
         comment = Github.issueCommentEventComment event
         author_user = Github.commentUser comment
@@ -180,53 +186,53 @@ notify_issue_comment event h = privmsg h actual_chan $ "New comment on issue #" 
         body = take 100 $ head $ lines $ T.unpack $ Github.commentBody comment
         url = B.unpack $ Github.commentHtmlUrl comment
 
-notify_commit :: Github.PushEvent -> Github.Commit -> Handle -> IO ()
-notify_commit pushevent commit h = privmsg h actual_chan $ "New patch by " ++ author ++ ": " ++ message ++ " (" ++ url ++ ")"
+-- Notify the PushEvent to all interested channels on the given network
+-- TODO: Currently, this only notifies exactly one channel
+notify_commit :: Config.Network -> Github.PushEvent -> Github.Commit -> Handle -> IO ()
+notify_commit network pushevent commit h = maybe (return ()) (\actual_chan -> privmsg h actual_chan $ "New patch by " ++ author ++ ": " ++ message ++ " (" ++ url ++ ")") maybe_actual_chan
     where
-        actual_chan = repository_id_to_chan $ Github.repoId $ Github.pushEventRepository pushevent
+        actual_chan_name = repository_id_to_chan $ Github.repoId $ Github.pushEventRepository pushevent
+        maybe_actual_chan = lookup_channel_in_network network actual_chan_name
         author = T.unpack $ Github.simpleUserName $ Github.commitCommitter commit
         message = T.unpack $ Github.commitMessage commit
         url = B.unpack $ Github.commitUrl commit
 
 -- Handle -> rawmessage
 evalraw :: Config.Config -> Config.Network -> Handle -> String -> IO ()
-evalraw  config network h (':' : s) = case command of 
-    _ : x : chan : tail | (x=="PRIVMSG") -> evalPrivMsg config network h chan $ drop 1 $ unwords tail --clean s -- unwords tail -- clean s
-                        | otherwise -> printf "Unknown command %s\n" x
+evalraw  config network h (':' : s) = case command of
+    _ : x : chan_name : tail | (x=="PRIVMSG") -> maybe (return ()) handleMessage (lookup_channel_in_network network chan_name)
+                             | otherwise -> printf "Unknown command %s\n" x
+                                  where handleMessage chan = evalPrivMsg config network chan h "TODOSENDERNAME" $ drop 1 $ unwords tail
     otherwise -> printf $ "INVALID COMMAND \n" ++ (show command)
     where command = words s
 evalraw _ _ _ s = printf "Received unknown message %s\n" s
 
--- Handle -> channel -> message
-evalPrivMsg :: Config.Config -> Config.Network -> Handle -> String -> String -> IO ()
+-- Config -> Network -> Channel -> Handle -> sender -> message
+evalPrivMsg :: Config.Config -> Config.Network -> Config.Channel -> Handle -> String -> String -> IO ()
 -- regular commands
-evalPrivMsg _ _ h _  "!quit"    = write h "QUIT" ":Exiting" >> exitWith ExitSuccess
---evalPrivMsg _ _ h _ x | "!quit " `isPrefixOf` x   = write h ("QUIT" ": Exiting (" ++ (drop 6 x) ++ ")") >> exitWith ExitSuccess
-evalPrivMsg _ _ h chan  "!help"    = privmsg h chan "Supported commands: !about, !help, !issue N, !say, !love, !xkcd"
-evalPrivMsg _ _ h chan  "!about"   = privmsg h chan "I'm indeed really awesome! Learn more about me in #neobot."
-evalPrivMsg _ _ h chan  "!love"    = privmsg h chan "Haskell is love. Haskell is life."
-evalPrivMsg _ _ h chan x | "!xkcd " `isPrefixOf` x = privmsg h chan $ "https://xkcd.com/" ++ (drop 6 x) -- TODO: Use https://xkcd.com/json.html to print the title!
-evalPrivMsg _ _ h _ x | "!join " `isPrefixOf` x = write h "JOIN" (drop 6 x)
-evalPrivMsg _ _ h chan x | "!say " `isPrefixOf` x = privmsg h chan (drop 5 x)
-evalPrivMsg config network h chan x | "!issue " `isPrefixOf` x =
-    case maybeChannel of
-        Nothing -> return ()
-        Just channel -> getissue config network channel h (drop 7 x) -- TODO: Change getissue to return a printable value instead of making it write stuff
-    where maybeChannel = lookup_channel_in_network config network chan
+evalPrivMsg _ _ chan h _  "!quit"    = write h "QUIT" ":Exiting" >> exitWith ExitSuccess
+--evalPrivMsg _ _ chan h _ x | "!quit " `isPrefixOf` x   = write h ("QUIT" ": Exiting (" ++ (drop 6 x) ++ ")") >> exitWith ExitSuccess
+evalPrivMsg _ _ chan h _ "!help"    = privmsg h chan "Supported commands: !about, !help, !issue N, !say, !love, !xkcd"
+evalPrivMsg _ _ chan h _ "!about"   = privmsg h chan "I'm indeed really awesome! Learn more about me in #neobot."
+evalPrivMsg _ _ chan h _ "!love"    = privmsg h chan "Haskell is love. Haskell is life."
+evalPrivMsg _ _ chan h _ x | "!xkcd " `isPrefixOf` x = privmsg h chan $ "https://xkcd.com/" ++ (drop 6 x) -- TODO: Use https://xkcd.com/json.html to print the title!
+evalPrivMsg _ _    _ h _ x | "!join " `isPrefixOf` x = write h "JOIN" (drop 6 x)
+evalPrivMsg _ _ chan h _ x | "!say " `isPrefixOf` x = privmsg h chan (drop 5 x)
+evalPrivMsg config network chan h _ x | "!issue " `isPrefixOf` x = getissue config network chan h (drop 7 x) -- TODO: Change getissue to return a printable value instead of making it write stuff
 -- TODO: !kpop: Post a random video link from a list
 -- keyword recognition
-evalPrivMsg _ _ h chan x | isGreeting x = privmsg h chan $ "Hi! Welcome to " ++ chan ++ ". Do you have a question on your mind? I'm just a bot, but lots of real people are hanging around here and may be able to help. Make sure to stick around for more than a few minutes to give them a chance to reply, though!"
-evalPrivMsg _ _ h chan x | ("msvcp" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "Got an MSVCP dll error? Download and install vc_redist.x64.exe from https://www.microsoft.com/en-us/download/details.aspx?id=48145 ."
-evalPrivMsg _ _ h chan x | ("0x0000007b" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "Got a 0x0000007b error when starting Citra? Don't download random .dll files from the internet! Undo your local modifications, and download and install vc_redist.x64.exe from https://www.microsoft.com/en-us/download/details.aspx?id=48145 instead."
+evalPrivMsg _ _ chan h _ x | isGreeting x = privmsg h chan $ "Hi! Welcome to " ++ (T.unpack $ Config.channelName chan) ++ ". Do you have a question on your mind? I'm just a bot, but lots of real people are hanging around here and may be able to help. Make sure to stick around for more than a few minutes to give them a chance to reply, though!"
+evalPrivMsg _ _ chan h _ x | ("msvcp" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "Got an MSVCP dll error? Download and install vc_redist.x64.exe from https://www.microsoft.com/en-us/download/details.aspx?id=48145 ."
+evalPrivMsg _ _ chan h _ x | ("0x0000007b" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "Got a 0x0000007b error when starting Citra? Don't download random .dll files from the internet! Undo your local modifications, and download and install vc_redist.x64.exe from https://www.microsoft.com/en-us/download/details.aspx?id=48145 instead."
 -- TODO: Recognize /pull/ as part of a github url
 -- possibly offensive stuff
-evalPrivMsg _ _ h chan x | ("emucr" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "Please don't support emucr by downloading our (or any, really) software from emucr."
-evalPrivMsg _ _ h chan x | ("pokemon" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "No, Pokémon does not run, yet."
-evalPrivMsg _ _ h chan x | (" rom " `isInfixOf` (map Char.toLower x)) && (" download" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "We don't support piracy here."
-evalPrivMsg _ _ h chan x | (" support " `isInfixOf` (map Char.toLower x)) && (" android " `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "Android support is far from being a priority, currently."
-evalPrivMsg _ _ h chan x | ("3dmoo" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "3dmoo, hah. Good one!"
-evalPrivMsg _ _ h chan x | ("tronds" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "TronDS is a very successfull 3DS emulator, indeed. Happy Opposite Day!"
-evalPrivMsg _ _ h chan x = printf "> %s" $ "Received \"" ++ x ++ "\" from channel " ++ chan ++ "\n"
+evalPrivMsg _ _ chan h _ x | ("emucr" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "Please don't support emucr by downloading our (or any, really) software from emucr."
+evalPrivMsg _ _ chan h _ x | ("pokemon" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "No, Pokémon does not run, yet."
+evalPrivMsg _ _ chan h _ x | (" rom " `isInfixOf` (map Char.toLower x)) && (" download" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "We don't support piracy here."
+evalPrivMsg _ _ chan h _ x | (" support " `isInfixOf` (map Char.toLower x)) && (" android " `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "Android support is far from being a priority, currently."
+evalPrivMsg _ _ chan h _ x | ("3dmoo" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "3dmoo, hah. Good one!"
+evalPrivMsg _ _ chan h _ x | ("tronds" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "TronDS is a very successfull 3DS emulator, indeed. Happy Opposite Day!"
+evalPrivMsg _ _ chan h _ x = printf "> %s" $ "Ignoring message \"" ++ x ++ "\" from channel " ++ (T.unpack $ Config.channelName chan) ++ "\n"
 
 isGreeting :: String -> Bool
 isGreeting s = any (`isPrefixOf` (map Char.toLower s)) ["hello", "hey", "hi", "helo", "helllo", "anyone here", "anybody here", "nobody", "help"]
@@ -243,22 +249,21 @@ myreadMaybe s = case reads s of
 
 getissue :: Config.Config -> Config.Network -> Config.Channel -> Handle -> String -> IO ()
 getissue config network channel h x =
-    let channel_name = T.unpack $ Config.channelName channel
-    in case maybeIssueNum of
-        Nothing -> privmsg h channel_name $ "That is not a valid issue number."
+    case maybeIssueNum of
+        Nothing -> privmsg h channel $ "That is not a valid issue number."
         Just issueNum ->
             do
                 possibleIssue <- GHAPI.issue' auth repo_owner repo_name issueNum
                 case possibleIssue of
-                    (Left err) -> privmsg h channel_name $ "Error: " ++ show err
-                    (Right issue) -> privmsg h channel_name $ "Issue " ++ show issueNum ++ ", reported by " ++ (GHAPI.githubOwnerLogin (GHAPI.issueUser issue)) ++ ": " ++ (GHAPI.issueTitle issue)
+                    (Left err) -> privmsg h channel $ "Error: " ++ show err
+                    (Right issue) -> privmsg h channel $ "Issue " ++ show issueNum ++ ", reported by " ++ (GHAPI.githubOwnerLogin (GHAPI.issueUser issue)) ++ ": " ++ (GHAPI.issueTitle issue)
 
     where maybeIssueNum = myreadMaybe x :: Maybe Int
-          channel_name = Config.channelName
           repo_owner = T.unpack $ fromJust $ Config.channelWatchedGithubRepoOwner channel -- TODO: This is unsafe!
           repo_name = T.unpack $ fromJust $ Config.channelWatchedGithubRepo channel -- TODO: This is unsafe!
           auth = Just $ GHAPI.GithubOAuth $ T.unpack $ Config.configAuthToken config
 
-
-privmsg :: Handle -> String -> String -> IO ()
-privmsg h chan s = write h "PRIVMSG" (chan ++ " :" ++ s)
+-- TODO: Change to "Channel -> Handle -> String -> IO ()" for consistency!
+privmsg :: Handle -> Config.Channel -> String -> IO ()
+privmsg h chan s = write h "PRIVMSG" (chan_name ++ " :" ++ s)
+    where chan_name = T.unpack $ Config.channelName chan
