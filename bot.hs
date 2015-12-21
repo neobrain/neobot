@@ -224,7 +224,16 @@ evalPrivMsg _ _ chan h _ "!about"   = privmsg h chan "I'm indeed really awesome!
 evalPrivMsg _ _ chan h _ "!love"    = privmsg h chan "Haskell is love. Haskell is life."
 evalPrivMsg _ _ chan h _ x | "!xkcd " `isPrefixOf` x = privmsg h chan $ "https://xkcd.com/" ++ (drop 6 x) -- TODO: Use https://xkcd.com/json.html to print the title!
 evalPrivMsg _ _    _ h _ x | "!join " `isPrefixOf` x = write h "JOIN" (drop 6 x)
+
+-- !say with and without target channel
+evalPrivMsg _ network source_chan h _ x | "!say #" `isPrefixOf` x = case maybeChan of
+    Nothing -> privmsg h source_chan $ "I don't know the channel " ++ chan_name ++ "!"
+    Just chan -> privmsg h chan message
+    where chan_name = head $ tail $ words x
+          maybeChan = lookup_channel_in_network network chan_name
+          message = unwords $ tail $ tail $ words x
 evalPrivMsg _ _ chan h _ x | "!say " `isPrefixOf` x = privmsg h chan (drop 5 x)
+
 evalPrivMsg config network chan h _ x | "!issue " `isPrefixOf` x = getissue config network chan h (drop 7 x) -- TODO: Change getissue to return a printable value instead of making it write stuff
 -- TODO: !kpop: Post a random video link from a list
 -- keyword recognition
