@@ -52,16 +52,6 @@ onEvent tchan event = do
     atomically $ writeTChan tchan event
     print "Wrote message!"
 
-{-
-forever $ do
-    print "Writing githubChan.. "
-    atomically $ writeTChan chan "Hi there!"
-    print "Wrote message!"
-    threadDelay 1000000 -- 0.1 second
-    where
-        forever a = do a; forever a
--}
-
 -- atomically $ newTChan :: IO TChan
 
 main = do
@@ -182,7 +172,7 @@ notify_issue network event h = forM_ filtered_channels send_notification
 notify_issue_comment :: Config.Network -> Github.IssueCommentEvent -> Handle -> IO ()
 notify_issue_comment network event h = forM_ filtered_channels send_notification
     where
-        send_notification chan = privmsg h chan $ author ++ " commented on issue #" ++ issue_id ++ ": \"" ++ body ++ "\" --- " ++ url
+        send_notification chan = privmsg h chan $ "\x0312\x02" ++ author ++ "\x0F commented on issue #" ++ issue_id ++ ": \"" ++ body ++ "\" --- " ++ url
         repo = Github.issueCommentEventRepository event
         filtered_channels = getChannelsObservingRepo network repo
         issue = Github.issueCommentEventIssue event
@@ -190,8 +180,9 @@ notify_issue_comment network event h = forM_ filtered_channels send_notification
         comment = Github.issueCommentEventComment event
         author_user = Github.commentUser comment
         author = T.unpack $ Github.userLogin $ Github.commentUser comment
-        body = take 100 $ takeWhile (/= '\r') $ takeWhile (/= '\n') $ T.unpack $ Github.commentBody comment -- ugly way to make sure both \r and \n are recognized as newline characters
+        body = shorten_to_length 100 $ takeWhile (/= '\r') $ takeWhile (/= '\n') $ T.unpack $ Github.commentBody comment -- ugly way to make sure both \r and \n are recognized as newline characters
         url = B.unpack $ Github.commentHtmlUrl comment
+        shorten_to_length n str = if length str <= n then str else (take (n - 6) str) ++ " [...]"
 
 -- Notify the PushEvent's commit to all interested channels on the given network
 notify_commit :: Config.Network -> Github.PushEvent -> Github.Commit -> Handle -> IO ()
