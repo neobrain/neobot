@@ -253,11 +253,6 @@ evalPrivMsg _ _ chan h _ x = printf "> %s" $ "Ignoring message \"" ++ x ++ "\" f
 isGreeting :: String -> Bool
 isGreeting s = any (`isPrefixOf` (map Char.toLower s)) ["hello", "hey", "hi", "helo", "helllo", "anyone here", "anybody here", "nobody", "help"]
 
--- Reduces raw IRC message to the actual message sent
--- TODO: This assumes the core message contains no ":"...
---clean :: String -> String
---clean = drop 1 . dropWhile (/=':') . drop 1
-
 myreadMaybe :: Read a => String -> Maybe a
 myreadMaybe s = case reads s of
                   [(val, "")] -> Just val
