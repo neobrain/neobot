@@ -190,7 +190,7 @@ notify_issue_comment network event h = forM_ filtered_channels send_notification
         comment = Github.issueCommentEventComment event
         author_user = Github.commentUser comment
         author = T.unpack $ Github.userLogin $ Github.commentUser comment
-        body = take 100 $ head $ lines $ T.unpack $ Github.commentBody comment
+        body = take 100 $ takeWhile (/= '\r') $ takeWhile (/= '\n') $ T.unpack $ Github.commentBody comment -- ugly way to make sure both \r and \n are recognized as newline characters
         url = B.unpack $ Github.commentHtmlUrl comment
 
 -- Notify the PushEvent's commit to all interested channels on the given network
