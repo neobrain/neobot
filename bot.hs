@@ -172,7 +172,7 @@ notify_issue network event h = forM_ filtered_channels send_notification
 notify_issue_comment :: Config.Network -> Github.IssueCommentEvent -> Handle -> IO ()
 notify_issue_comment network event h = forM_ filtered_channels send_notification
     where
-        send_notification chan = privmsg h chan $ "\x0312\x02" ++ author ++ "\x0F commented on issue #" ++ issue_id ++ ": \"" ++ body ++ "\" --- " ++ url
+        send_notification chan = privmsg h chan $ "\x03\&12\x02" ++ author ++ "\x0F commented on issue #" ++ issue_id ++ ": \"" ++ body ++ "\" --- " ++ url
         repo = Github.issueCommentEventRepository event
         filtered_channels = getChannelsObservingRepo network repo
         issue = Github.issueCommentEventIssue event
@@ -188,8 +188,15 @@ notify_issue_comment network event h = forM_ filtered_channels send_notification
 notify_commit :: Config.Network -> Github.PushEvent -> Github.Commit -> Handle -> IO ()
 notify_commit network event commit h = forM_ filtered_channels send_notification
     where
-        send_notification chan = privmsg h chan $ "New patch by " ++ author ++ ": " ++ message ++ " (" ++ url ++ ")"
+        send_notification chan = privmsg h chan $ "[" ++ format_boldpink ++ repo_name ++ format_reset ++ "] new patch by " ++ author ++ ": "
+                                                      ++ format_italics ++ message ++ format_reset ++ " " ++ format_darkblue ++ url
+        format_boldpink = "\x03\&13\x02"
+        format_darkblue = "\x03\&02"
+        format_purple   = "\x03\&06"
+        format_italics  = "" -- "\x1D" -- doesn't seem to be supported in irssi :(
+        format_reset    = "\x0F"
         repo = Github.pushEventRepository event
+        repo_name = T.unpack $ Github.repoName repo
         filtered_channels = getChannelsObservingRepo network repo
         author = T.unpack $ Github.simpleUserName $ Github.commitCommitter commit
         message = T.unpack $ Github.commitMessage commit
