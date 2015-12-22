@@ -21,10 +21,10 @@ import qualified Data.Char as Char
 
 import Data.Maybe (isJust, fromJust)
 
-import Control.Monad (forM_, void)
+import Control.Monad (forM_, void, when)
 import Control.Monad.STM
 import Control.Concurrent
-import Control.Concurrent.Async (mapConcurrently)
+import Control.Concurrent.Async (mapConcurrently, wait, async, race)
 import Control.Concurrent.STM.TChan
 
 import Ghhooks
@@ -37,92 +37,93 @@ import qualified Data.HashMap.Strict as HM
 
 import qualified Data.ByteString.Char8 as B
 
-type GithubChanMap = HM.HashMap (Config.Network, Config.Channel) (TChan Github.Payload)
-
--- githubThread :: GithubChanMap -> IO ()
 githubThread :: TChan Github.Payload -> IO ()
 githubThread chan = start 4567 $ M.fromList [("/stuff", (onEvent chan))]
 
--- onEvent :: GithubChanMap -> Github.Payload -> IO ()
 onEvent :: TChan Github.Payload -> Github.Payload -> IO ()
--- onEvent chan_map event = do
 onEvent tchan event = do
     print "Writing githubChan.. "
-    -- forM_ (HM.elems chan_map) (\tchan -> atomically $ writeTChan tchan event)
     atomically $ writeTChan tchan event
     print "Wrote message!"
 
--- atomically $ newTChan :: IO TChan
 
-main = do
+main = controlThread
+
+controlThread = do
     maybeConfig <- Config.readConfig "config.json"
     case maybeConfig of
         Nothing -> putStrLn "Couldn't parse config!"
         Just config -> do
-                         let -- githubChans = HM.fromList $ map (,(atomically newTChan)) $ networks_channels_list
-                             networks_channels_list = concat $ map (\network -> map (network,) (Config.networkChannels network)) (Config.configNetworks config)
-                             watching_channels = filter (watches_some_repo . snd) networks_channels_list
-                             watches_some_repo = null . Config.channelWatchedGithubRepos
+                         githubChan <- atomically $ newBroadcastTChan
+                         forkIO $ githubThread githubChan
 
-                         --githubChans <- do
-                         --           -- tchans <- sequence $ repeat $ atomically $ newTChan
-                         --           -- return $ HM.fromList $ zip networks_channels_list (repeat $ atomically $ newTChan)
-                         --           return $ atomically $ HM.fromList $ zip networks_channels_list (repeat $ newTChan)
-                         githubChan <- atomically $ newTChan
-                         -- forkIO $ githubThread githubChans -- TODO: This should be shared across all network threads!
-                         forkIO $ githubThread githubChan -- TODO: This should be shared across all network threads!
-
-                         -- TODO: Spawn gitHubThread
                          void $ mapConcurrently (\network -> do
-                            let
-                                server = T.unpack $ Config.networkServer network
+                            let server = T.unpack $ Config.networkServer network
                                 port = Config.networkPort network
-                                nick = T.unpack $ Config.networkNick network
-                                channels = Config.networkChannels network
-                                watching_channels = filter (watches_some_repo) channels
-                            ----githubChan <- atomically $ newTChan
-                            --ircReadChan <- atomically $ newTChan
-                            --ircWriteChan <- atomically $ newTChan
-                            ----forkIO $ githubThread githubChan -- TODO: This should be shared across all network threads!
-                            --forkIO $ ircThread ircReadChan ircWriteChan
-                            h <- connectTo server (PortNumber (fromIntegral port))
-                            hSetBuffering h NoBuffering
-                            write h "NICK" nick
-                            write h "USER" (nick ++ " 0 * :tutorial bot")
-                            mapM_ (\chan -> write h "JOIN" $ T.unpack $ Config.channelName chan) channels
-                            -- listen config githubChans h
-                            listen config network githubChan h
+                            h <- connectToIrcNetwork server port
+                            controlReadChan <- atomically $ dupTChan githubChan -- TODO: Would prefer cloneTChan instead!
+                            ircNetworkThread config network h controlReadChan
                             ) (Config.configNetworks config)
+
+-- Connect to the given IRC network
+connectToIrcNetwork :: String -> Int -> IO Handle
+connectToIrcNetwork server port = do
+    h <- connectTo server (PortNumber (fromIntegral port))
+    hSetBuffering h NoBuffering
+    return h
+    -- TODO: Allocated handles should be hClosed eventually!
+
+-- Worker thread handling all communication to a particular IRC network
+ircNetworkThread :: Config.Config -> Config.Network -> Handle -> TChan Github.Payload -> IO ()
+ircNetworkThread config network h githubChan = do
+    let
+        nick = T.unpack $ Config.networkNick network
+        channels = Config.networkChannels network
+        watching_channels = filter (watches_some_repo) channels
+        watches_some_repo = null . Config.channelWatchedGithubRepos
+    write h "NICK" nick
+    write h "USER" (nick ++ " 0 * :neobot")
+    mapM_ (\chan -> write h "JOIN" $ T.unpack $ Config.channelName chan) channels
+    listen config network githubChan h
+
 
 write :: Handle -> String -> String -> IO ()
 write h s t = do
     hPrintf h "%s %s\r\n" s t
     printf    "> %s %s\n" s t
 
--- listen :: Config.Config -> GithubChanMap -> Handle -> IO ()
--- listen config tchan_map h = forever $ do
+-- Listen for any kind of event which might be relevant for this IRC session
 listen :: Config.Config -> Config.Network -> TChan Github.Payload -> Handle -> IO ()
-listen config network tchan h = forever $ do
-    t <- hGetLine h
-    let s = init t
+listen config network controlChan h = forever $ do
+    ret <- race (atomically $ readTChan controlChan) (hWaitForInput h (-1))
+    case ret of
+        Left controlSignal -> handleGithubPayload network controlSignal h
+        Right hasInput -> when hasInput $ do
+                                input <- hGetLine h
+                                handleMessage config network h input
+    where
+        forever a = do a; forever a
+
+-- Handle an incoming Github webhook for the current IRC network
+handleGithubPayload :: Config.Network -> Github.Payload -> Handle -> IO ()
+handleGithubPayload network payload h =
+    case payload of
+        Github.Push         event -> sequence_ $ map (\commit -> notify_commit network event commit h) (Github.pushEventCommits event)
+        Github.IssueComment event -> notify_issue_comment network event h
+        Github.Issue        event -> notify_issue network event h
+        _                         -> print "Received payload, but not sure what to do with it!"
+
+-- Handle an incoming IRC message for the current IRC network
+handleMessage :: Config.Config -> Config.Network -> Handle -> String -> IO ()
+handleMessage config network h t = do
     if ping s
     then pong s
     else do
         print $ "Reading message.."
-        do
-            maybePayload <- atomically $ tryReadTChan tchan
-            case maybePayload of
-                Just payload -> case payload of
-                    --Github.Push event -> notify_commit event (head (Github.pushEventCommits event)) h default_chan
-                    Github.Push         event -> sequence_ $ map (\commit -> notify_commit network event commit h) (Github.pushEventCommits event)
-                    Github.IssueComment event -> notify_issue_comment network event h
-                    Github.Issue        event -> notify_issue network event h
-                    _                  -> print "Received payload, but not sure what to do with it!"
-                Nothing -> do
-                    return ()
         evalraw config network h s
     putStrLn s
     where
+        s = init t
         forever a = do a; forever a
 
         ping x    = "PING :" `isPrefixOf` x
@@ -180,7 +181,7 @@ notify_issue_comment network event h = forM_ filtered_channels send_notification
         comment = Github.issueCommentEventComment event
         author_user = Github.commentUser comment
         author = T.unpack $ Github.userLogin $ Github.commentUser comment
-        body = shorten_to_length 100 $ takeWhile (/= '\r') $ takeWhile (/= '\n') $ T.unpack $ Github.commentBody comment -- ugly way to make sure both \r and \n are recognized as newline characters
+        body = shorten_to_length 100 $ takeWhile (/= '\r') $ takeWhile (/= '\n') $ T.unpack $ Github.commentBody comment -- ugly way to make sure both \r and \n are recognized as newline characters; TODO: Might want to try universalNewlineMode!
         url = B.unpack $ Github.commentHtmlUrl comment
         shorten_to_length n str = if length str <= n then str else (take (n - 6) str) ++ " [...]"
 
@@ -215,7 +216,8 @@ evalraw _ _ _ s = printf "Received unknown message %s\n" s
 -- Config -> Network -> Channel -> Handle -> sender -> message
 evalPrivMsg :: Config.Config -> Config.Network -> Config.Channel -> Handle -> String -> String -> IO ()
 -- regular commands
-evalPrivMsg _ _ chan h _  "!quit"    = write h "QUIT" ":Exiting" >> exitWith ExitSuccess
+--evalPrivMsg _ _ chan h _  "!quit"    = write h "QUIT" ":Exiting" >> exitWith ExitSuccess
+evalPrivMsg _ _ chan h _  "!quit"    = privmsg h chan "Yeah... no. Shouldn't you be working instead of trying to mess with me?"
 --evalPrivMsg _ _ chan h _ x | "!quit " `isPrefixOf` x   = write h ("QUIT" ": Exiting (" ++ (drop 6 x) ++ ")") >> exitWith ExitSuccess
 evalPrivMsg _ _ chan h _ "!help"    = privmsg h chan "Supported commands: !about, !help, !issue N, !say, !love, !xkcd"
 evalPrivMsg _ _ chan h _ "!about"   = privmsg h chan "I'm indeed really awesome! Learn more about me in #neobot."
@@ -249,7 +251,7 @@ evalPrivMsg _ _ chan h _ x | ("tronds" `isInfixOf` (map Char.toLower x)) && (Con
 evalPrivMsg _ _ chan h _ x = printf "> %s" $ "Ignoring message \"" ++ x ++ "\" from channel " ++ (T.unpack $ Config.channelName chan) ++ "\n"
 
 isGreeting :: String -> Bool
-isGreeting s = any (`isPrefixOf` (map Char.toLower s)) ["hello", "hey", "hi", "helo", "helllo", "anyone here", "anybody here", "nobody", "help"]
+isGreeting s = any (`isPrefixOf` (map Char.toLower s)) ["hello", "hey", "hi", "helo", "helllo", "anyone?", "anyone here", "anybody here", "nobody", "help"]
 
 myreadMaybe :: Read a => String -> Maybe a
 myreadMaybe s = case reads s of
