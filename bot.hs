@@ -278,9 +278,12 @@ notify_issue_comment network event h = forM_ filtered_channels send_notification
         comment = Github.issueCommentEventComment event
         author_user = Github.commentUser comment
         author = T.unpack $ Github.userLogin $ Github.commentUser comment
-        body = shorten_to_length 100 $ takeWhile (/= '\r') $ takeWhile (/= '\n') $ T.unpack $ Github.commentBody comment -- ugly way to make sure both \r and \n are recognized as newline characters; TODO: Might want to try universalNewlineMode!
+        body = shorten_to_length 100 $ firstLineOnly $ T.unpack $ Github.commentBody comment
         url = B.unpack $ Github.commentHtmlUrl comment
         shorten_to_length n str = if length str <= n then str else (take (n - 6) str) ++ " [...]"
+
+firstLineOnly :: String -> String
+firstLineOnly str = takeWhile (/= '\r') $ takeWhile (/= '\n') $ str -- ugly way to make sure both \r and \n are recognized as newline characters; TODO: Might want to try universalNewlineMode!
 
 -- Notify the PushEvent's commit to all interested channels on the given network
 notify_commit :: Config.Network -> Github.PushEvent -> Github.Commit -> Handle -> IO ()
@@ -297,7 +300,7 @@ notify_commit network event commit h = forM_ filtered_channels send_notification
         repo_name = T.unpack $ Github.repoName repo
         filtered_channels = getChannelsObservingRepo network repo
         author = T.unpack $ Github.simpleUserName $ Github.commitCommitter commit
-        message = T.unpack $ Github.commitMessage commit
+        message = firstLineOnly $ T.unpack $ Github.commitMessage commit
         url = B.unpack $ Github.commitUrl commit
 
 -- Handle -> rawmessage
