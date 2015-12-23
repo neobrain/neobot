@@ -21,7 +21,7 @@ import qualified Data.Char as Char
 
 import Data.Maybe (isJust, fromJust)
 
-import Control.Monad (forM_, void, when)
+import Control.Monad (forM_, forM, void, when)
 import Control.Monad.STM
 import Control.Concurrent
 import Control.Concurrent.Async (mapConcurrently, wait, async, race)
@@ -37,33 +37,71 @@ import qualified Data.HashMap.Strict as HM
 
 import qualified Data.ByteString.Char8 as B
 
-githubThread :: TChan Github.Payload -> IO ()
+data SignalData = SignalGithub Github.Payload | SignalReload
+
+
+data IrcThreadQuitReason = QuitReasonReload | QuitReasonQuit
+
+githubThread :: TChan SignalData -> IO ()
 githubThread chan = start 4567 $ M.fromList [("/stuff", (onEvent chan))]
 
-onEvent :: TChan Github.Payload -> Github.Payload -> IO ()
+onEvent :: TChan SignalData -> Github.Payload -> IO ()
 onEvent tchan event = do
-    print "Writing githubChan.. "
-    atomically $ writeTChan tchan event
-    print "Wrote message!"
+    atomically $ writeTChan tchan $ SignalGithub event
 
 
-main = controlThread
+main = controlThread (Config.Config { Config.configNetworks = [], Config.configAuthToken = "" }) M.empty
 
-controlThread = do
+type IRCNetwork = (String, Int)
+type IRCNetworkConn = M.Map IRCNetwork Handle
+
+-- Get list of IRC networks (as a servername + port) registered in the given configured networks
+ircNetworksInConfig :: [Config.Network] -> [IRCNetwork]
+ircNetworksInConfig networks = map (\network -> (T.unpack $ Config.networkServer network, Config.networkPort network)) networks
+
+controlThread :: Config.Config -> IRCNetworkConn -> IO ()
+controlThread oldconfig connections = do
     maybeConfig <- Config.readConfig "config.json"
     case maybeConfig of
         Nothing -> putStrLn "Couldn't parse config!"
         Just config -> do
-                         githubChan <- atomically $ newBroadcastTChan
-                         forkIO $ githubThread githubChan
+                         githubChan <- atomically $ newBroadcastTChan -- TODO: Recreate if auth token changed
+                         githubThreadId <- forkIO $ githubThread githubChan
 
-                         void $ mapConcurrently (\network -> do
+                         -- Disconnect from servers that were removed from the config
+                         list_removed_conns <- forM removed_servers (\server -> do
+                                                    putStrLn $ "Disconnecting from .. " ++ show server
+                                                    let h = connections M.! server
+                                                    disconnectFromIrcNetwork h
+                                                    return (server,h))
+
+                         -- Connect to servers that were added to the config
+                         list_new_conns <- forM added_servers (\(server,port) -> do
+                                                               putStrLn $ "Connecting to .. " ++ show (server, port)
+                                                               handle <- connectToIrcNetwork server port
+                                                               return ((server,port),handle))
+                         -- Collect list of all connections
+                         let server_map = M.union (M.filter (not.(`elem` (M.fromList list_removed_conns))) connections) (M.fromList list_new_conns)
+
+                         quitReason <- mapConcurrently (\network -> do
                             let server = T.unpack $ Config.networkServer network
                                 port = Config.networkPort network
-                            h <- connectToIrcNetwork server port
+                                h = server_map M.! (server,port)
                             controlReadChan <- atomically $ dupTChan githubChan -- TODO: Would prefer cloneTChan instead!
                             ircNetworkThread config network h controlReadChan
                             ) (Config.configNetworks config)
+
+                         killThread githubThreadId
+
+                         -- For now, assuming all threads quit for the same reason
+                         case head quitReason of
+                             QuitReasonReload -> do controlThread config server_map
+                             _ -> do controlThread config server_map --return ()
+                       where
+                         servers = ircNetworksInConfig (Config.configNetworks config)
+                         old_servers = ircNetworksInConfig (Config.configNetworks oldconfig)
+                         added_servers = filter (not.(`elem` old_servers)) servers :: [IRCNetwork]
+                         removed_servers = filter (not.(`elem` servers)) old_servers :: [IRCNetwork]
 
 -- Connect to the given IRC network
 connectToIrcNetwork :: String -> Int -> IO Handle
@@ -71,10 +109,15 @@ connectToIrcNetwork server port = do
     h <- connectTo server (PortNumber (fromIntegral port))
     hSetBuffering h NoBuffering
     return h
-    -- TODO: Allocated handles should be hClosed eventually!
+
+-- Disconnect from the given IRC network
+disconnectFromIrcNetwork :: Handle -> IO ()
+disconnectFromIrcNetwork h = do
+    write h "QUIT" ":Exiting"
+    hClose h
 
 -- Worker thread handling all communication to a particular IRC network
-ircNetworkThread :: Config.Config -> Config.Network -> Handle -> TChan Github.Payload -> IO ()
+ircNetworkThread :: Config.Config -> Config.Network -> Handle -> TChan SignalData -> IO (IrcThreadQuitReason)
 ircNetworkThread config network h githubChan = do
     let
         nick = T.unpack $ Config.networkNick network
@@ -90,19 +133,30 @@ ircNetworkThread config network h githubChan = do
 write :: Handle -> String -> String -> IO ()
 write h s t = do
     hPrintf h "%s %s\r\n" s t
-    printf    "> %s %s\n" s t
+    --printf    "> %s %s\n" s t
 
 -- Listen for any kind of event which might be relevant for this IRC session
-listen :: Config.Config -> Config.Network -> TChan Github.Payload -> Handle -> IO ()
-listen config network controlChan h = forever $ do
+listen :: Config.Config -> Config.Network -> TChan SignalData -> Handle -> IO (IrcThreadQuitReason)
+listen config network controlChan h = do
     ret <- race (atomically $ readTChan controlChan) (hWaitForInput h (-1))
     case ret of
-        Left controlSignal -> handleGithubPayload network controlSignal h
-        Right hasInput -> when hasInput $ do
+        Left (SignalGithub githubPayload) -> handleGithubPayload network githubPayload h >> repeat
+        Left SignalReload -> return (QuitReasonReload)
+        Right hasInput -> (when hasInput $ do
                                 input <- hGetLine h
-                                handleMessage config network h input
+
+                                -- TODO: Clean this up!
+                                let stuff "!reload" = atomically $ writeTChan controlChan SignalReload
+
+                                case words input of
+                                    _ : x : chan_name : tail | (x=="PRIVMSG") && ((drop 1 $ unwords tail) == "!reload") -> stuff $ drop 1 $ unwords tail
+                                    _ -> putStrLn $ "Unknown command " ++ input
+
+                                handleMessage config network h input) >> repeat
     where
-        forever a = do a; forever a
+        repeat = listen config network controlChan h
+
+--TODO: Formalize IRC messages in some "data IRCMessage = ..."
 
 -- Handle an incoming Github webhook for the current IRC network
 handleGithubPayload :: Config.Network -> Github.Payload -> Handle -> IO ()

@@ -22,14 +22,6 @@ import Network.Wai.Logger (withStdoutLogger, ApacheLogger)
 import Github.PostReceive.Types --(Payload)
 -- import MyGithubTypes (Payload)
 
-myprint :: Payload -> IO ()
-myprint content = case content of
-    Push pe -> print $ "Hi!" ++ show pe
-    _ -> print "Unknown content!"
-
---main :: IO ()
---main = start 4567 $ M.fromList [("/stuff", myprint)]
-
 start :: Port -> M.Map B.ByteString (Payload -> IO ()) -> IO ()
 start port routes = do
     putStrLn startingMessage
