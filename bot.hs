@@ -174,11 +174,18 @@ write h s t = do
 -- Listen for any kind of event which might be relevant for this IRC session
 listen :: Config.Config -> Config.Network -> TChan SignalData -> Handle -> IO (IrcThreadQuitReason)
 listen config network controlChan h = do
-    ret <- race (atomically $ readTChan controlChan) (hWaitForInput h (-1))
+    -- Concurrently wait for an external signal or an IRC message to be ready
+    ret <- race (atomically $ peekTChan controlChan) (hWaitForInput h (-1))
     case ret of
-        Left (SignalGithub githubPayload) -> handleGithubPayload network githubPayload h >> repeat
-        Left SignalReload -> return (QuitReasonReload)
+        Left _ -> do
+            -- consume TChan data and process it 
+            signal <- atomically $ readTChan controlChan
+            case signal of
+                SignalGithub githubPayload -> handleGithubPayload network githubPayload h >> repeat
+                SignalReload -> return (QuitReasonReload)
+
         Right hasInput -> (when hasInput $ do
+                                -- consume IRC input and process it
                                 input <- hGetLine h
 
                                 -- TODO: Clean this up!
