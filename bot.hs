@@ -53,17 +53,21 @@ onEvent tchan event = do
 main = controlThread (Config.Config { Config.configNetworks = [], Config.configAuthToken = "" }) M.empty
 
 type IRCNetwork = (String, Int)
+type IRCChan = String
 type IRCNetworkConn = M.Map IRCNetwork Handle
+
+ircNetworkFromConfig :: Config.Network -> IRCNetwork
+ircNetworkFromConfig network = (T.unpack $ Config.networkServer network, Config.networkPort network)
 
 -- Get list of IRC networks (as a servername + port) registered in the given configured networks
 ircNetworksInConfig :: [Config.Network] -> [IRCNetwork]
-ircNetworksInConfig networks = map (\network -> (T.unpack $ Config.networkServer network, Config.networkPort network)) networks
+ircNetworksInConfig networks = map ircNetworkFromConfig networks
 
 controlThread :: Config.Config -> IRCNetworkConn -> IO ()
 controlThread oldconfig connections = do
     maybeConfig <- Config.readConfig "config.json"
     case maybeConfig of
-        Nothing -> putStrLn "Couldn't parse config!"
+        Nothing -> putStrLn "Couldn't parse config!" -- TODO: When reloading, reject the new configuration instead
         Just config -> do
                          githubChan <- atomically $ newBroadcastTChan -- TODO: Recreate if auth token changed
                          githubThreadId <- forkIO $ githubThread githubChan
@@ -75,14 +79,33 @@ controlThread oldconfig connections = do
                                                     disconnectFromIrcNetwork h
                                                     return (server,h))
 
-                         -- Connect to servers that were added to the config
-                         list_new_conns <- forM added_servers (\(server,port) -> do
-                                                               putStrLn $ "Connecting to .. " ++ show (server, port)
-                                                               handle <- connectToIrcNetwork server port
-                                                               return ((server,port),handle))
-                         -- Collect list of all connections
-                         let server_map = M.union (M.filter (not.(`elem` (M.fromList list_removed_conns))) connections) (M.fromList list_new_conns)
+                         -- Connect to servers that were added to the config (and join all channels)
+                         list_new_conns <- forM added_servers (\network -> do
+                                                               let ircnetwork = ircNetworkFromConfig network
+                                                                   channels = map (T.unpack . Config.channelName) $ Config.networkChannels network
+                                                               putStrLn $ "Connecting to .. " ++ show ircnetwork
+                                                               h <- connectToIrcNetwork ircnetwork
+                                                               forM channels $ joinIrcChan h
+                                                               return (ircnetwork,h))
 
+                         -- Collect list of all connections
+                         let server_map = M.union (M.filter (`notElem` (M.fromList list_removed_conns)) connections) (M.fromList list_new_conns)
+
+                         -- loop through common networks and connect/disconnect to/from changed channels
+                         -- TODO: Zipping here only works when the networks where defined in the same order in the old/new config files.
+                         forM_ (zip common_networks_new common_networks_old) (\(network_new,network_old) -> do
+                            let server = T.unpack $ Config.networkServer network_new
+                                port = Config.networkPort network_new
+                                h = server_map M.! (server,port)
+                                channels_new = map (T.unpack . Config.channelName) $ Config.networkChannels network_new
+                                channels_old = map (T.unpack . Config.channelName) $ Config.networkChannels network_old
+                                channels_added = filter (`notElem` channels_old) channels_new
+                                channels_removed = filter (`notElem` channels_new) channels_old
+                            forM_ channels_removed $ leaveIrcChan h
+                            forM_ channels_added $ joinIrcChan h
+                            )
+
+                         -- Enter processing loops (one thread per IRC network)
                          quitReason <- mapConcurrently (\network -> do
                             let server = T.unpack $ Config.networkServer network
                                 port = Config.networkPort network
@@ -91,7 +114,7 @@ controlThread oldconfig connections = do
                             ircNetworkThread config network h controlReadChan
                             ) (Config.configNetworks config)
 
-                         killThread githubThreadId
+                         killThread githubThreadId -- TODO: shut this down more gracefully!
 
                          -- For now, assuming all threads quit for the same reason
                          case head quitReason of
@@ -100,12 +123,15 @@ controlThread oldconfig connections = do
                        where
                          servers = ircNetworksInConfig (Config.configNetworks config)
                          old_servers = ircNetworksInConfig (Config.configNetworks oldconfig)
-                         added_servers = filter (not.(`elem` old_servers)) servers :: [IRCNetwork]
-                         removed_servers = filter (not.(`elem` servers)) old_servers :: [IRCNetwork]
+                         added_servers = filter ((`notElem` old_servers). ircNetworkFromConfig) (Config.configNetworks config)
+                         removed_servers = filter (`notElem` servers) old_servers :: [IRCNetwork]
+                         common_networks_new = filter ((andPred (`elem` servers) (`elem` old_servers)) . ircNetworkFromConfig) (Config.configNetworks config)
+                         common_networks_old = filter ((andPred (`elem` servers) (`elem` old_servers)) . ircNetworkFromConfig) (Config.configNetworks oldconfig)
+                         andPred pred1 pred2 = \inp -> (pred1 inp) && (pred2 inp)
 
 -- Connect to the given IRC network
-connectToIrcNetwork :: String -> Int -> IO Handle
-connectToIrcNetwork server port = do
+connectToIrcNetwork :: IRCNetwork -> IO Handle
+connectToIrcNetwork (server,port) = do
     h <- connectTo server (PortNumber (fromIntegral port))
     hSetBuffering h NoBuffering
     return h
@@ -115,6 +141,16 @@ disconnectFromIrcNetwork :: Handle -> IO ()
 disconnectFromIrcNetwork h = do
     write h "QUIT" ":Exiting"
     hClose h
+
+joinIrcChan :: Handle -> IRCChan -> IO ()
+joinIrcChan h chan = do
+    putStrLn $ "Joining " ++ chan
+    write h "JOIN" $ chan
+
+leaveIrcChan :: Handle -> IRCChan -> IO ()
+leaveIrcChan h chan = do
+    putStrLn $ "Leaving " ++ chan
+    write h "PART" $ chan
 
 -- Worker thread handling all communication to a particular IRC network
 ircNetworkThread :: Config.Config -> Config.Network -> Handle -> TChan SignalData -> IO (IrcThreadQuitReason)
@@ -277,7 +313,6 @@ evalPrivMsg _ _ chan h _ "!help"    = privmsg h chan "Supported commands: !about
 evalPrivMsg _ _ chan h _ "!about"   = privmsg h chan "I'm indeed really awesome! Learn more about me in #neobot."
 evalPrivMsg _ _ chan h _ "!love"    = privmsg h chan "Haskell is love. Haskell is life."
 evalPrivMsg _ _ chan h _ x | "!xkcd " `isPrefixOf` x = privmsg h chan $ "https://xkcd.com/" ++ (drop 6 x) -- TODO: Use https://xkcd.com/json.html to print the title!
-evalPrivMsg _ _    _ h _ x | "!join " `isPrefixOf` x = write h "JOIN" (drop 6 x)
 
 -- !say with and without target channel
 evalPrivMsg _ network source_chan h _ x | "!say #" `isPrefixOf` x = case maybeChan of
