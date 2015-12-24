@@ -163,7 +163,7 @@ ircNetworkThread config network h githubChan = do
     write h "NICK" nick
     write h "USER" (nick ++ " 0 * :neobot")
     mapM_ (\chan -> write h "JOIN" $ T.unpack $ Config.channelName chan) channels
-    listen config network githubChan h
+    eventLoop config network githubChan h
 
 
 write :: Handle -> String -> String -> IO ()
@@ -171,33 +171,43 @@ write h s t = do
     hPrintf h "%s %s\r\n" s t
     --printf    "> %s %s\n" s t
 
--- Listen for any kind of event which might be relevant for this IRC session
-listen :: Config.Config -> Config.Network -> TChan SignalData -> Handle -> IO (IrcThreadQuitReason)
-listen config network controlChan h = do
+listen :: TChan SignalData -> Handle -> IO (Either SignalData String)
+listen controlChan h = do
     -- Concurrently wait for an external signal or an IRC message to be ready
     ret <- race (atomically $ peekTChan controlChan) (hWaitForInput h (-1))
     case ret of
+        -- consume data and process it (repeat if the data is not actually valid)
         Left _ -> do
-            -- consume TChan data and process it 
             signal <- atomically $ readTChan controlChan
+            return $ Left signal
+        Right hasInput ->
+            if hasInput
+                then do
+                    input <- hGetLine h
+                    return $ Right input
+                else listen controlChan h
+
+-- Listen for any kind of event which might be relevant for this IRC session
+eventLoop :: Config.Config -> Config.Network -> TChan SignalData -> Handle -> IO (IrcThreadQuitReason)
+eventLoop config network controlChan h = do
+    ret <- listen controlChan h
+    case ret of
+        Left signal ->
             case signal of
                 SignalGithub githubPayload -> handleGithubPayload network githubPayload h >> repeat
                 SignalReload -> return (QuitReasonReload)
 
-        Right hasInput -> (when hasInput $ do
-                                -- consume IRC input and process it
-                                input <- hGetLine h
+        Right input -> do
+            -- TODO: Clean this up!
+            let stuff "!reload" = atomically $ writeTChan controlChan SignalReload
 
-                                -- TODO: Clean this up!
-                                let stuff "!reload" = atomically $ writeTChan controlChan SignalReload
+            case words input of
+                _ : x : chan_name : tail | (x=="PRIVMSG") && ((drop 1 $ unwords tail) == "!reload") -> stuff $ drop 1 $ unwords tail
+                _ -> putStrLn $ "Unknown command " ++ input
 
-                                case words input of
-                                    _ : x : chan_name : tail | (x=="PRIVMSG") && ((drop 1 $ unwords tail) == "!reload") -> stuff $ drop 1 $ unwords tail
-                                    _ -> putStrLn $ "Unknown command " ++ input
-
-                                handleMessage config network h input) >> repeat
+            handleMessage config network h input >> repeat
     where
-        repeat = listen config network controlChan h
+        repeat = eventLoop config network controlChan h
 
 --TODO: Formalize IRC messages in some "data IRCMessage = ..."
 
