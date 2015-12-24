@@ -55,8 +55,8 @@ app aplogger routes req respond
         bs <- strictRequestBody req
         --bs <- requestBody req
         --putStrLn $ show bs
-        --BL.putStrLn bs -- $ B.unpack bs
-        print bs -- $ B.unpack bs
+        BL.putStrLn bs -- $ B.unpack bs
+        --print bs -- $ B.unpack bs
         flip (either internalError) (eitherDecode bs) $ \payload -> cont payload >> ok
     formCase cont = do
         bs <- BL.drop (BL.length "payload=") <$> strictRequestBody req

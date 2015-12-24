@@ -14,6 +14,7 @@ import System.Environment
 
 import Github.Auth as GHAPI
 import Github.Issues as GHAPI
+import Github.Issues.Comments as GHAPI
 
 import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text as T
@@ -42,13 +43,49 @@ data SignalData = SignalGithub Github.Payload | SignalReload
 
 data IrcThreadQuitReason = QuitReasonReload | QuitReasonQuit
 
-githubThread :: TChan SignalData -> IO ()
-githubThread chan = start 4567 $ M.fromList [("/stuff", (onEvent chan))]
+githubThread :: Config.Config -> TChan SignalData -> IO ()
+githubThread config chan = start 4567 $ M.fromList [("/stuff", (onEvent config chan))]
 
-onEvent :: TChan SignalData -> Github.Payload -> IO ()
-onEvent tchan event = do
+onEvent :: Config.Config -> TChan SignalData -> Github.Payload -> IO ()
+onEvent config tchan event = do
+    case event of
+        Github.PullRequest event -> do
+            let repo = Github.pullRequestEventRepository event
+                action = T.unpack $ Github.pullRequestEventAction event
+                sender_user = Github.pullRequestEventSender event
+                sender = T.unpack $ Github.userLogin $ sender_user
+                pr = Github.pullRequestEventData event
+                pr_id = Github.pullRequestNumber pr
+                title = T.unpack $ Github.pullRequestTitle pr
+                url = B.unpack $ Github.pullRequestHtmlUrl pr
+
+                repo_full_name = T.unpack $ Github.repoFullName repo
+                split_repo_full_name = break (=='/') repo_full_name
+                repo_owner = fst $ split_repo_full_name
+                repo_name = drop 1 $ snd split_repo_full_name
+
+                pr_base = Github.pullRequestBase pr
+                pr_head = Github.pullRequestHead pr
+
+                base_sha = B.unpack $ Github.pullRequestCommitSha pr_base
+
+                head_repo_owner = takeWhile (/='/') $ T.unpack $ Github.repoFullName $ Github.pullRequestCommitRepo pr_head
+                head_sha = B.unpack $ Github.pullRequestCommitSha pr_head
+
+                message = "Hi, this is neobot, using neobrain's account. I'm keeping an archive of versions of this PR:" ++ githubNewline ++ githubNewline ++ pr_diff
+                githubNewline = "\r\n"
+
+                -- Assuming the base repo is the repo that sent this webhook...
+                pr_diff = (B.unpack $ Github.pullRequestUpdatedAt pr) ++ ": https://github.com/" ++ repo_full_name ++ "/compare/" ++ base_sha ++ "..." ++ head_repo_owner ++ ":" ++ head_sha
+
+            when (action == "opened" || action == "synchronize") $ do
+                void $ GHAPI.createComment (githubAuth config) repo_owner repo_name pr_id message
+
+        _ -> return ()
     atomically $ writeTChan tchan $ SignalGithub event
 
+githubAuth :: Config.Config -> GHAPI.GithubAuth
+githubAuth config = GHAPI.GithubOAuth $ T.unpack $ Config.configAuthToken config
 
 main = controlThread (Config.Config { Config.configNetworks = [], Config.configAuthToken = "" }) M.empty
 
@@ -70,7 +107,7 @@ controlThread oldconfig connections = do
         Nothing -> putStrLn "Couldn't parse config!" -- TODO: When reloading, reject the new configuration instead
         Just config -> do
                          githubChan <- atomically $ newBroadcastTChan -- TODO: Recreate if auth token changed
-                         githubThreadId <- forkIO $ githubThread githubChan
+                         githubThreadId <- forkIO $ githubThread config githubChan
 
                          -- Disconnect from servers that were removed from the config
                          list_removed_conns <- forM removed_servers (\server -> do
@@ -218,6 +255,7 @@ handleGithubPayload network payload h =
         Github.Push         event -> sequence_ $ map (\commit -> notify_commit network event commit h) (Github.pushEventCommits event)
         Github.IssueComment event -> notify_issue_comment network event h
         Github.Issue        event -> notify_issue network event h
+        Github.PullRequest  event -> notifyPullRequest network event h
         _                         -> print "Received payload, but not sure what to do with it!"
 
 -- Handle an incoming IRC message for the current IRC network
@@ -261,6 +299,23 @@ getChannelsObservingRepo network repo = filter channel_observing all_channels
         channel_observing = elem reference_watched_repo . Config.channelWatchedGithubRepos
 
 -- Notify the IssueEvent to all interested channels on the given network
+notifyPullRequest :: Config.Network -> Github.PullRequestEvent -> Handle -> IO ()
+notifyPullRequest network event h = forM_ filtered_channels send_notification
+    where
+        repo = Github.pullRequestEventRepository event
+        filtered_channels = getChannelsObservingRepo network repo
+
+        send_notification chan = privmsg h chan $ sender ++ " " ++ action ++ " pull request #" ++ pr_id ++ ": \"" ++ title ++ "\" --- " ++ url
+
+        action = T.unpack $ Github.pullRequestEventAction event
+        sender_user = Github.pullRequestEventSender event
+        sender = T.unpack $ Github.userLogin $ sender_user
+        pr = Github.pullRequestEventData event
+        pr_id = show $ Github.pullRequestNumber pr
+        title = T.unpack $ Github.pullRequestTitle pr
+        url = B.unpack $ Github.pullRequestHtmlUrl pr
+
+-- Notify the IssueEvent to all interested channels on the given network
 notify_issue :: Config.Network -> Github.IssueEvent -> Handle -> IO ()
 notify_issue network event h = forM_ filtered_channels send_notification
     where
@@ -270,7 +325,6 @@ notify_issue network event h = forM_ filtered_channels send_notification
         issue = Github.issueEventIssue event
         title = T.unpack $ Github.issueTitle issue
         issue_id = show $ Github.issueNumber issue
-        comment = T.unpack $ Github.issueBody issue
         sender_user = Github.issueEventSender event
         sender = T.unpack $ Github.userLogin $ sender_user
         url = B.unpack $ Github.issueHtmlUrl issue
