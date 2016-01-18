@@ -38,6 +38,8 @@ import qualified Data.HashMap.Strict as HM
 
 import qualified Data.ByteString.Char8 as B
 
+import Text.Regex.Posix
+
 data SignalData = SignalGithub Github.Payload | SignalReload
 
 
@@ -414,7 +416,7 @@ evalPrivMsg _ _ chan h _ x | ("tronds" `isInfixOf` (map Char.toLower x)) && (Con
 evalPrivMsg _ _ chan h _ x = printf "> %s" $ "Ignoring message \"" ++ x ++ "\" from channel " ++ (T.unpack $ Config.channelName chan) ++ "\n"
 
 isGreeting :: String -> Bool
-isGreeting s = any (`isPrefixOf` (map Char.toLower s)) ["hello", "hey", "hi", "helo", "helllo", "anyone?", "anyone here", "anybody here", "nobody", "help"]
+isGreeting s = (map Char.toLower s) =~ "^(hello|hey|hi|helo|helllo|anyone?|anyone here|anybody here|nobody|help|h+e+l+o+)"
 
 myreadMaybe :: Read a => String -> Maybe a
 myreadMaybe s = case reads s of
