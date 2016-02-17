@@ -37,6 +37,9 @@ import qualified Data.Map as M
 import qualified Data.HashMap.Strict as HM
 
 import qualified Data.ByteString.Char8 as B
+import qualified Data.ByteString.Lazy as L
+
+import Network.HTTP.Conduit
 
 import Text.Regex.Posix
 
@@ -208,7 +211,7 @@ ircNetworkThread config network h githubChan = do
 write :: Handle -> String -> String -> IO ()
 write h s t = do
     hPrintf h "%s %s\r\n" s t
-    --printf    "> %s %s\n" s t
+    printf    "> Sending \"%s %s\"\n" s t
 
 listen :: TChan SignalData -> Handle -> IO (Either SignalData String)
 listen controlChan h = do
@@ -372,9 +375,11 @@ notify_commit network event commit h = forM_ filtered_channels send_notification
 -- Handle -> rawmessage
 evalraw :: Config.Config -> Config.Network -> Handle -> String -> IO ()
 evalraw  config network h (':' : s) = case command of
-    _ : x : chan_name : tail | (x=="PRIVMSG") -> maybe (return ()) handleMessage (lookup_channel_in_network network chan_name)
-                             | otherwise -> printf "Unknown command %s\n" x
-                                  where handleMessage chan = evalPrivMsg config network chan h "TODOSENDERNAME" $ drop 1 $ unwords tail
+    user : x : chan_name : tail | (x=="PRIVMSG") -> maybe (return ()) handleMessage (lookup_channel_in_network network chan_name)
+                                      | otherwise -> printf "Unknown command %s\n" x
+                                           where
+                                             handleMessage chan = evalPrivMsg config network chan h sender_name $ drop 1 $ unwords tail
+                                             sender_name = takeWhile (/='!') user
     otherwise -> printf $ "INVALID COMMAND \n" ++ (show command)
     where command = words s
 evalraw _ _ _ s = printf "Received unknown message %s\n" s
@@ -408,6 +413,15 @@ evalPrivMsg _ _ chan h _ x | ("msvcp" `isInfixOf` (map Char.toLower x)) = privms
 evalPrivMsg _ _ chan h _ x | ("0x0000007b" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "Got a 0x0000007b error when starting Citra? Don't download random .dll files from the internet! Undo your local modifications, and download and install vc_redist.x64.exe from https://www.microsoft.com/en-us/download/details.aspx?id=48145 instead."
 -- TODO: Recognize /pull/ as part of a github url
 -- possibly offensive stuff
+evalPrivMsg _ _ chan h sender x | ("youtube.com/watch" `isInfixOf` (map Char.toLower x)) = (flip catch) ((\_ -> return ()) :: SomeException -> IO ()) $ do
+    contents <- Network.HTTP.Conduit.simpleHttp url
+    when (("http://www.youtube.com/user/pcmaker2") `isInfixOf` (wordToChar $ L.unpack contents)) $ do
+        write h "KICK" $ chan_name ++ " " ++ sender ++ " :Nope, no advertisement of YouTube channels that regularly post prerelease stuff here."
+    where
+        url = head $ filter (("youtube.com/watch" `isInfixOf`). map Char.toLower) $ words x
+        wordToChar = map (\c -> (toEnum (fromEnum c) :: Char))
+        chan_name = T.unpack $ Config.channelName chan
+
 evalPrivMsg _ _ chan h _ x | ("emucr" `isInfixOf` (map Char.toLower x)) && (Config.channelReplyToCatchPhrases chan) = privmsg h chan $ "Please don't support emucr by downloading our (or any, really) software from emucr."
 evalPrivMsg _ _ chan h _ x | ("pokemon" `isInfixOf` (map Char.toLower x)) && ("?" `isInfixOf` (map Char.toLower x)) && (Config.channelReplyToCatchPhrases chan) = privmsg h chan $ "No, we won't help you emulating Pokémon."
 evalPrivMsg _ _ chan h _ x | (" rom " `isInfixOf` (map Char.toLower x)) && (Config.channelReplyToCatchPhrases chan) && (" download" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "We don't support piracy here."
