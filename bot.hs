@@ -390,10 +390,11 @@ evalPrivMsg :: Config.Config -> Config.Network -> Config.Channel -> Handle -> St
 --evalPrivMsg _ _ chan h _  "!quit"    = write h "QUIT" ":Exiting" >> exitWith ExitSuccess
 evalPrivMsg _ _ chan h _  "!quit"    = privmsg h chan "Yeah... no. Shouldn't you be working instead of trying to mess with me?"
 --evalPrivMsg _ _ chan h _ x | "!quit " `isPrefixOf` x   = write h ("QUIT" ": Exiting (" ++ (drop 6 x) ++ ")") >> exitWith ExitSuccess
-evalPrivMsg _ _ chan h _ "!help"    = privmsg h chan "Supported commands: !about, !help, !issue N, !say, !love, !xkcd"
+evalPrivMsg _ _ chan h _ "!help"    = privmsg h chan "Supported commands: !about, !gpl, !help, !issue N, !love, !say, !xkcd"
 evalPrivMsg _ _ chan h _ "!about"   = privmsg h chan "I'm indeed really awesome! Learn more about me in #neobot."
 evalPrivMsg _ _ chan h _ "!love"    = privmsg h chan "Haskell is love. Haskell is life."
-evalPrivMsg _ _ chan h _ "!gpl"    = privmsg h chan "RELEASE THE SOURCE ALREADY!!!1!!1"
+evalPrivMsg _ _ chan h _ "!gpl"     = privmsg h chan "RELEASE THE SOURCE ALREADY!!!1"
+evalPrivMsg _ _ chan h _ x | ("gpl gpl gpl" `isInfixOf` (map Char.toLower x) && (Config.channelReplyToCatchPhrases chan)) = privmsg h chan "RELEASE THE SOURCE ALREADY!!!1"
 evalPrivMsg _ _ chan h _ x | "!xkcd " `isPrefixOf` x = privmsg h chan $ "https://xkcd.com/" ++ (drop 6 x) -- TODO: Use https://xkcd.com/json.html to print the title!
 
 -- !say with and without target channel
