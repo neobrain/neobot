@@ -5,6 +5,7 @@ module Config
     ( readConfig
     , Config(..)
     , Network(..)
+    , KPopVideo(..)
     , Channel(..)
     , WatchedRepo(..)
     ) where
@@ -25,12 +26,14 @@ import qualified Data.ByteString.Lazy.Char8 as B
 data Config = Config
     { configNetworks :: [Network]
     , configAuthToken :: Text
+    , configKPopVideos :: [KPopVideo]
     } deriving (Show, Eq, Generic)
 
 instance FromJSON Config where
     parseJSON (Object v) =
         Config <$> v .: "networks"
                <*> v .: "auth_token" -- for GitHub
+               <*> v .: "kpop_videos"
     parseJSON _ = fail "Config must be an object"
 
 instance Hashable Config
@@ -85,6 +88,21 @@ instance FromJSON WatchedRepo where
     parseJSON _ = fail "WatchedRepo must be an object"
 
 instance Hashable WatchedRepo
+
+data KPopVideo = KPopVideo
+    { kpopvideoArtist :: Text
+    , kpopvideoTitle :: Text
+    , kpopvideoUrl :: Text
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON KPopVideo where
+    parseJSON (Object v) =
+        KPopVideo <$> v .: "artist"
+                  <*> v .: "title"
+                  <*> v .: "url"
+    parseJSON _ = fail "KPopVideo must be an object"
+
+instance Hashable KPopVideo
 
 -- Mapping filename to IO action returning a Config object
 readConfig :: String -> IO (Maybe Config)

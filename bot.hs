@@ -39,12 +39,13 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy as L
 
+import qualified System.Random as R
+
 import Network.HTTP.Conduit
 
 import Text.Regex.Posix
 
 data SignalData = SignalGithub Github.Payload | SignalReload
-
 
 data IrcThreadQuitReason = QuitReasonReload | QuitReasonQuit
 
@@ -92,7 +93,7 @@ onEvent config tchan event = do
 githubAuth :: Config.Config -> GHAPI.GithubAuth
 githubAuth config = GHAPI.GithubOAuth $ T.unpack $ Config.configAuthToken config
 
-main = controlThread (Config.Config { Config.configNetworks = [], Config.configAuthToken = "" }) M.empty
+main = controlThread (Config.Config { Config.configNetworks = [], Config.configAuthToken = "", Config.configKPopVideos = [] }) M.empty
 
 type IRCNetwork = (String, Int)
 type IRCChan = String
@@ -390,12 +391,14 @@ evalPrivMsg :: Config.Config -> Config.Network -> Config.Channel -> Handle -> St
 --evalPrivMsg _ _ chan h _  "!quit"    = write h "QUIT" ":Exiting" >> exitWith ExitSuccess
 evalPrivMsg _ _ chan h _  "!quit"    = privmsg h chan "Yeah... no. Shouldn't you be working instead of trying to mess with me?"
 --evalPrivMsg _ _ chan h _ x | "!quit " `isPrefixOf` x   = write h ("QUIT" ": Exiting (" ++ (drop 6 x) ++ ")") >> exitWith ExitSuccess
-evalPrivMsg _ _ chan h _ "!help"    = privmsg h chan "Supported commands: !about, !gpl, !help, !issue N, !love, !say, !xkcd"
+evalPrivMsg _ _ chan h _ "!help"    = privmsg h chan "Supported commands: !about, !gpl, !help, !issue N, !kpop, !love, !say, !xkcd"
 evalPrivMsg _ _ chan h _ "!about"   = privmsg h chan "I'm indeed really awesome! Learn more about me in #neobot."
 evalPrivMsg _ _ chan h _ "!love"    = privmsg h chan "Haskell is love. Haskell is life."
 evalPrivMsg _ _ chan h _ "!gpl"     = privmsg h chan "RELEASE THE SOURCE ALREADY!!!1"
 evalPrivMsg _ _ chan h _ x | ("gpl gpl gpl" `isInfixOf` (map Char.toLower x) && (Config.channelReplyToCatchPhrases chan)) = privmsg h chan "RELEASE THE SOURCE ALREADY!!!1"
 evalPrivMsg _ _ chan h _ x | "!xkcd " `isPrefixOf` x = privmsg h chan $ "https://xkcd.com/" ++ (drop 6 x) -- TODO: Use https://xkcd.com/json.html to print the title!
+evalPrivMsg config _ chan h _ "!kpop" = sendKPopVideo h chan (Config.configKPopVideos config)
+evalPrivMsg config _ chan h _ x | "!kpop " `isPrefixOf` x = sendKPopVideo h chan (Config.configKPopVideos config) -- TODO: Only pass videos that contain the given string
 
 -- !say with and without target channel
 evalPrivMsg _ network source_chan h _ x | "!say #" `isPrefixOf` x = case maybeChan of
@@ -407,7 +410,6 @@ evalPrivMsg _ network source_chan h _ x | "!say #" `isPrefixOf` x = case maybeCh
 evalPrivMsg _ _ chan h _ x | "!say " `isPrefixOf` x = privmsg h chan (drop 5 x)
 
 evalPrivMsg config network chan h _ x | "!issue " `isPrefixOf` x = getissue config network chan h (drop 7 x) -- TODO: Change getissue to return a printable value instead of making it write stuff
--- TODO: !kpop: Post a random video link from a list
 -- keyword recognition
 evalPrivMsg _ _ chan h _ x | isGreeting x && (Config.channelReplyToGreetings chan) = privmsg h chan $ "Hi! Welcome to " ++ (T.unpack $ Config.channelName chan) ++ ". Do you have a question on your mind? I'm just a bot, but lots of real people are hanging around here and may be able to help. Make sure to stick around for more than a few minutes to give them a chance to reply, though!"
 evalPrivMsg _ _ chan h _ x | ("msvcp" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "Got an MSVCP dll error? Download and install vc_redist.x64.exe from https://www.microsoft.com/en-us/download/details.aspx?id=48145 ."
@@ -459,3 +461,21 @@ getissue config network channel h x =
 privmsg :: Handle -> Config.Channel -> String -> IO ()
 privmsg h chan s = write h "PRIVMSG" (chan_name ++ " :" ++ s)
     where chan_name = T.unpack $ Config.channelName chan
+
+rollIntInRange :: Int -> Int -> IO Int
+rollIntInRange min max = R.getStdRandom (R.randomR (min, max))
+
+getRandomElement :: [a] -> IO a
+getRandomElement list = do
+    index <- rollIntInRange 0 (length $ tail list)
+    return $ list !! index
+
+-- Send a randomly selected video from the given list to the given channel
+sendKPopVideo :: Handle -> Config.Channel -> [Config.KPopVideo] -> IO ()
+sendKPopVideo h chan videos = do
+    video <- getRandomElement videos --  TODO: Create sublist of videos matching any of the given keywords
+    let
+        artist = Config.kpopvideoArtist video
+        title = Config.kpopvideoTitle video
+        url = Config.kpopvideoUrl video
+    privmsg h chan $ T.unpack $ T.concat [artist, T.pack " - \"", title, T.pack "\": ", url]
