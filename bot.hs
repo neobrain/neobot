@@ -95,12 +95,12 @@ githubAuth config = GHAPI.GithubOAuth $ T.unpack $ Config.configAuthToken config
 
 main = controlThread (Config.Config { Config.configNetworks = [], Config.configAuthToken = "", Config.configKPopVideos = [] }) M.empty
 
-type IRCNetwork = (String, Int)
-type IRCChan = String
+type IRCNetwork = (T.Text, Int)
+type IRCChan = T.Text
 type IRCNetworkConn = M.Map IRCNetwork Handle
 
 ircNetworkFromConfig :: Config.Network -> IRCNetwork
-ircNetworkFromConfig network = (T.unpack $ Config.networkServer network, Config.networkPort network)
+ircNetworkFromConfig network = (Config.networkServer network, Config.networkPort network)
 
 -- Get list of IRC networks (as a servername + port) registered in the given configured networks
 ircNetworksInConfig :: [Config.Network] -> [IRCNetwork]
@@ -125,7 +125,7 @@ controlThread oldconfig connections = do
                          -- Connect to servers that were added to the config (and join all channels)
                          list_new_conns <- forM added_servers (\network -> do
                                                                let ircnetwork = ircNetworkFromConfig network
-                                                                   channels = map (T.unpack . Config.channelName) $ Config.networkChannels network
+                                                                   channels = map Config.channelName $ Config.networkChannels network
                                                                putStrLn $ "Connecting to .. " ++ show ircnetwork
                                                                h <- connectToIrcNetwork ircnetwork
                                                                forM channels $ joinIrcChan h
@@ -137,11 +137,11 @@ controlThread oldconfig connections = do
                          -- loop through common networks and connect/disconnect to/from changed channels
                          -- TODO: Zipping here only works when the networks where defined in the same order in the old/new config files.
                          forM_ (zip common_networks_new common_networks_old) (\(network_new,network_old) -> do
-                            let server = T.unpack $ Config.networkServer network_new
+                            let server = Config.networkServer network_new
                                 port = Config.networkPort network_new
                                 h = server_map M.! (server,port)
-                                channels_new = map (T.unpack . Config.channelName) $ Config.networkChannels network_new
-                                channels_old = map (T.unpack . Config.channelName) $ Config.networkChannels network_old
+                                channels_new = map Config.channelName $ Config.networkChannels network_new
+                                channels_old = map Config.channelName $ Config.networkChannels network_old
                                 channels_added = filter (`notElem` channels_old) channels_new
                                 channels_removed = filter (`notElem` channels_new) channels_old
                             forM_ channels_removed $ leaveIrcChan h
@@ -150,7 +150,7 @@ controlThread oldconfig connections = do
 
                          -- Enter processing loops (one thread per IRC network)
                          quitReason <- mapConcurrently (\network -> do
-                            let server = T.unpack $ Config.networkServer network
+                            let server = Config.networkServer network
                                 port = Config.networkPort network
                                 h = server_map M.! (server,port)
                             controlReadChan <- atomically $ dupTChan githubChan -- TODO: Would prefer cloneTChan instead!
@@ -175,7 +175,7 @@ controlThread oldconfig connections = do
 -- Connect to the given IRC network
 connectToIrcNetwork :: IRCNetwork -> IO Handle
 connectToIrcNetwork (server,port) = do
-    h <- connectTo server (PortNumber (fromIntegral port))
+    h <- connectTo (T.unpack server) (PortNumber (fromIntegral port))
     hSetBuffering h NoBuffering
     return h
 
@@ -187,13 +187,13 @@ disconnectFromIrcNetwork h = do
 
 joinIrcChan :: Handle -> IRCChan -> IO ()
 joinIrcChan h chan = do
-    putStrLn $ "Joining " ++ chan
-    write h "JOIN" $ chan
+    putStrLn $ "Joining " ++ (T.unpack chan)
+    write h "JOIN" $ (T.unpack chan)
 
 leaveIrcChan :: Handle -> IRCChan -> IO ()
 leaveIrcChan h chan = do
-    putStrLn $ "Leaving " ++ chan
-    write h "PART" $ chan
+    putStrLn $ "Leaving " ++ (T.unpack chan)
+    write h "PART" $ (T.unpack chan)
 
 -- Worker thread handling all communication to a particular IRC network
 ircNetworkThread :: Config.Config -> Config.Network -> Handle -> TChan SignalData -> IO (IrcThreadQuitReason)
