@@ -182,6 +182,7 @@ connectToIrcNetwork :: IRCNetwork -> IO Handle
 connectToIrcNetwork (server,port) = do
     h <- connectTo (T.unpack server) (PortNumber (fromIntegral port))
     hSetBuffering h NoBuffering
+    hSetEncoding h utf8
     return h
 
 -- Disconnect from the given IRC network
