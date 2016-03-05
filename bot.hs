@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ViewPatterns #-} -- We need this to pattern match Text, currently..
 
 import Data.List
 import Network
@@ -18,7 +19,11 @@ import Github.Issues.Comments as GHAPI
 
 import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text as T
+import qualified Data.Text.IO as T
+import qualified Data.Text.Read as T
 import qualified Data.Char as Char
+
+import qualified BasicPrelude as T (show)
 
 import Data.Maybe (isJust, fromJust)
 
@@ -187,34 +192,34 @@ disconnectFromIrcNetwork h = do
 
 joinIrcChan :: Handle -> IRCChan -> IO ()
 joinIrcChan h chan = do
-    putStrLn $ "Joining " ++ (T.unpack chan)
-    write h "JOIN" $ (T.unpack chan)
+    T.putStrLn $ "Joining " `mappend` chan
+    write h "JOIN" chan
 
 leaveIrcChan :: Handle -> IRCChan -> IO ()
 leaveIrcChan h chan = do
-    putStrLn $ "Leaving " ++ (T.unpack chan)
-    write h "PART" $ (T.unpack chan)
+    T.putStrLn $ "Leaving " `mappend` chan
+    write h "PART" chan
 
 -- Worker thread handling all communication to a particular IRC network
 ircNetworkThread :: Config.Config -> Config.Network -> Handle -> TChan SignalData -> IO (IrcThreadQuitReason)
 ircNetworkThread config network h githubChan = do
     let
-        nick = T.unpack $ Config.networkNick network
+        nick = Config.networkNick network
         channels = Config.networkChannels network
         watching_channels = filter (watches_some_repo) channels
         watches_some_repo = null . Config.channelWatchedGithubRepos
     write h "NICK" nick
-    write h "USER" (nick ++ " 0 * :neobot")
-    mapM_ (\chan -> write h "JOIN" $ T.unpack $ Config.channelName chan) channels
+    write h "USER" (nick `mappend` " 0 * :neobot")
+    mapM_ (\chan -> write h "JOIN" $ Config.channelName chan) channels
     eventLoop config network githubChan h
 
 
-write :: Handle -> String -> String -> IO ()
+write :: Handle -> T.Text -> T.Text -> IO ()
 write h s t = do
-    hPrintf h "%s %s\r\n" s t
-    printf    "> Sending \"%s %s\"\n" s t
+    T.hPutStrLn h $ T.concat [s, " ", t, "\r\n"]
+    T.putStrLn $ T.concat ["> Sending \"", s, " ", t, "\"\n"]
 
-listen :: TChan SignalData -> Handle -> IO (Either SignalData String)
+listen :: TChan SignalData -> Handle -> IO (Either SignalData T.Text)
 listen controlChan h = do
     -- Concurrently wait for an external signal or an IRC message to be ready
     ret <- race (atomically $ peekTChan controlChan) (hWaitForInput h (-1))
@@ -226,7 +231,7 @@ listen controlChan h = do
         Right hasInput ->
             if hasInput
                 then do
-                    input <- hGetLine h
+                    input <- T.hGetLine h
                     return $ Right input
                 else listen controlChan h
 
@@ -244,9 +249,9 @@ eventLoop config network controlChan h = do
             -- TODO: Clean this up!
             let stuff "!reload" = atomically $ writeTChan controlChan SignalReload
 
-            case words input of
-                _ : x : chan_name : tail | (x=="PRIVMSG") && ((drop 1 $ unwords tail) == "!reload") -> stuff $ drop 1 $ unwords tail
-                _ -> putStrLn $ "Unknown command " ++ input
+            case T.words input of
+                _ : x : chan_name : tail | (x=="PRIVMSG") && ((T.drop 1 $ T.unwords tail) == "!reload") -> stuff $ T.drop 1 $ T.unwords tail
+                _ -> T.putStrLn $ "Unknown command " `mappend` input
 
             handleMessage config network h input >> repeat
     where
@@ -265,32 +270,32 @@ handleGithubPayload network payload h =
         _                         -> print "Received payload, but not sure what to do with it!"
 
 -- Handle an incoming IRC message for the current IRC network
-handleMessage :: Config.Config -> Config.Network -> Handle -> String -> IO ()
+handleMessage :: Config.Config -> Config.Network -> Handle -> T.Text -> IO ()
 handleMessage config network h t = do
     if ping s
     then pong s
     else do
         print $ "Reading message.."
         evalraw config network h s
-    putStrLn s
+    T.putStrLn s
     where
-        s = init t
+        s = T.init t
         forever a = do a; forever a
 
-        ping x    = "PING :" `isPrefixOf` x
-        pong x    = write h "PONG" (':' : drop 6 x)
+        ping x    = "PING :" `T.isPrefixOf` x
+        pong x    = write h "PONG" (":" `mappend` T.drop 6 x)
 
-lookup_channel_in_network :: Config.Network -> String -> Maybe Config.Channel
-lookup_channel_in_network network channel = find ((channel==) . T.unpack . Config.channelName) $ Config.networkChannels network
+lookup_channel_in_network :: Config.Network -> T.Text -> Maybe Config.Channel
+lookup_channel_in_network network channel = find ((channel==) . Config.channelName) $ Config.networkChannels network
 
-lookup_channel_in_config :: Config.Config -> String -> String -> Maybe Config.Channel
+lookup_channel_in_config :: Config.Config -> T.Text -> T.Text -> Maybe Config.Channel
 lookup_channel_in_config config network channel =
     maybe Nothing channel_match network_match
     where network_match = lookup_network_in_config config network
           channel_match network = lookup_channel_in_network network channel
 
-lookup_network_in_config :: Config.Config -> String -> Maybe Config.Network
-lookup_network_in_config config network = find ((network==) . T.unpack . Config.networkName) $ Config.configNetworks config
+lookup_network_in_config :: Config.Config -> T.Text -> Maybe Config.Network
+lookup_network_in_config config network = find ((network==) . Config.networkName) $ Config.configNetworks config
 
 -- Get a list of all channels in the given network which observe the given GitHub repository
 getChannelsObservingRepo :: Config.Network -> Github.Repository -> [Config.Channel]
@@ -311,82 +316,82 @@ notifyPullRequest network event h = forM_ filtered_channels send_notification
         repo = Github.pullRequestEventRepository event
         filtered_channels = getChannelsObservingRepo network repo
 
-        send_notification chan = privmsg h chan $ sender ++ " " ++ action ++ " pull request #" ++ pr_id ++ ": \"" ++ title ++ "\" --- " ++ url
+        send_notification chan = privmsg h chan $ T.concat [sender, " ", action, " pull request #", pr_id, ": \"", title, "\" --- ", url]
 
-        action = T.unpack $ Github.pullRequestEventAction event
+        action = Github.pullRequestEventAction event
         sender_user = Github.pullRequestEventSender event
-        sender = T.unpack $ Github.userLogin $ sender_user
+        sender = Github.userLogin $ sender_user
         pr = Github.pullRequestEventData event
-        pr_id = show $ Github.pullRequestNumber pr
-        title = T.unpack $ Github.pullRequestTitle pr
-        url = B.unpack $ Github.pullRequestHtmlUrl pr
+        pr_id = T.show $ Github.pullRequestNumber pr
+        title = Github.pullRequestTitle pr
+        url = T.show $ B.unpack $ Github.pullRequestHtmlUrl pr
 
 -- Notify the IssueEvent to all interested channels on the given network
 notify_issue :: Config.Network -> Github.IssueEvent -> Handle -> IO ()
 notify_issue network event h = forM_ filtered_channels send_notification
     where
-        send_notification chan = privmsg h chan $ sender ++ " " ++ action ++ " issue #" ++ issue_id ++ ": \"" ++ title ++ "\" --- " ++ url
+        send_notification chan = privmsg h chan $ T.concat [sender, " ", action, " issue #", issue_id, ": \"", title, "\" --- ", url]
         repo = Github.issueEventRepository event
         filtered_channels = getChannelsObservingRepo network repo
         issue = Github.issueEventIssue event
-        title = T.unpack $ Github.issueTitle issue
-        issue_id = show $ Github.issueNumber issue
+        title = Github.issueTitle issue
+        issue_id = T.show $ Github.issueNumber issue
         sender_user = Github.issueEventSender event
-        sender = T.unpack $ Github.userLogin $ sender_user
-        url = B.unpack $ Github.issueHtmlUrl issue
-        action = T.unpack $ Github.issueEventAction event
+        sender = Github.userLogin $ sender_user
+        url = T.show $ B.unpack $ Github.issueHtmlUrl issue
+        action = Github.issueEventAction event
 
 -- Notify the IssueCommentEvent to all interested channels on the given network
 notify_issue_comment :: Config.Network -> Github.IssueCommentEvent -> Handle -> IO ()
 notify_issue_comment network event h = forM_ filtered_channels send_notification
     where
-        send_notification chan = privmsg h chan $ "\x03\&12\x02" ++ author ++ "\x0F commented on issue #" ++ issue_id ++ ": \"" ++ body ++ "\" --- " ++ url
+        send_notification chan = privmsg h chan $ T.concat ["\x03\&12\x02", author, "\x0F commented on issue #", issue_id, ": \"", body, "\" --- ", url]
         repo = Github.issueCommentEventRepository event
         filtered_channels = getChannelsObservingRepo network repo
         issue = Github.issueCommentEventIssue event
-        issue_id = show $ Github.issueNumber issue
+        issue_id = T.show $ Github.issueNumber issue
         comment = Github.issueCommentEventComment event
         author_user = Github.commentUser comment
-        author = T.unpack $ Github.userLogin $ Github.commentUser comment
-        body = shorten_to_length 100 $ firstLineOnly $ T.unpack $ Github.commentBody comment
-        url = B.unpack $ Github.commentHtmlUrl comment
-        shorten_to_length n str = if length str <= n then str else (take (n - 6) str) ++ " [...]"
+        author = Github.userLogin $ Github.commentUser comment
+        body = shorten_to_length 100 $ firstLineOnly $ Github.commentBody comment
+        url = T.show $ B.unpack $ Github.commentHtmlUrl comment
+        shorten_to_length n str = if T.length str <= n then str else (T.take (n - 6) str) `mappend` " [...]"
 
-firstLineOnly :: String -> String
-firstLineOnly str = takeWhile (/= '\r') $ takeWhile (/= '\n') $ str -- ugly way to make sure both \r and \n are recognized as newline characters; TODO: Might want to try universalNewlineMode!
+firstLineOnly :: T.Text -> T.Text
+firstLineOnly str = T.takeWhile (/= '\r') $ T.takeWhile (/= '\n') $ str -- ugly way to make sure both \r and \n are recognized as newline characters; TODO: Might want to try universalNewlineMode!
 
 -- Notify the PushEvent's commit to all interested channels on the given network
 notify_commit :: Config.Network -> Github.PushEvent -> Github.Commit -> Handle -> IO ()
 notify_commit network event commit h = forM_ filtered_channels send_notification
     where
-        send_notification chan = privmsg h chan $ "[" ++ format_boldpink ++ repo_name ++ format_reset ++ "] new patch by " ++ author ++ ": "
-                                                      ++ format_italics ++ message ++ format_reset ++ " " ++ format_darkblue ++ url
+        send_notification chan = privmsg h chan $ T.concat ["[", format_boldpink, repo_name, format_reset, "] new patch by ", author, ": ",
+                                                                 format_italics, message, format_reset, " ", format_darkblue, url]
         format_boldpink = "\x03\&13\x02"
         format_darkblue = "\x03\&02"
         format_purple   = "\x03\&06"
         format_italics  = "" -- "\x1D" -- doesn't seem to be supported in irssi :(
         format_reset    = "\x0F"
         repo = Github.pushEventRepository event
-        repo_name = T.unpack $ Github.repoName repo
+        repo_name = Github.repoName repo
         filtered_channels = getChannelsObservingRepo network repo
-        author = T.unpack $ Github.simpleUserName $ Github.commitCommitter commit
-        message = firstLineOnly $ T.unpack $ Github.commitMessage commit
-        url = B.unpack $ Github.commitUrl commit
+        author = Github.simpleUserName $ Github.commitCommitter commit
+        message = firstLineOnly $ Github.commitMessage commit
+        url = T.show $ B.unpack $ Github.commitUrl commit
 
 -- Handle -> rawmessage
-evalraw :: Config.Config -> Config.Network -> Handle -> String -> IO ()
-evalraw  config network h (':' : s) = case command of
+evalraw :: Config.Config -> Config.Network -> Handle -> T.Text -> IO ()
+evalraw  config network h (T.stripPrefix (T.singleton ':') -> Just s) = case command of
     user : x : chan_name : tail | (x=="PRIVMSG") -> maybe (return ()) handleMessage (lookup_channel_in_network network chan_name)
-                                      | otherwise -> printf "Unknown command %s\n" x
+                                      | otherwise -> T.putStrLn $ T.concat ["Unknown command ", x, "\n"]
                                            where
-                                             handleMessage chan = evalPrivMsg config network chan h sender_name $ drop 1 $ unwords tail
-                                             sender_name = takeWhile (/='!') user
+                                             handleMessage chan = evalPrivMsg config network chan h sender_name $ T.drop 1 $ T.unwords tail
+                                             sender_name = T.takeWhile (/='!') user
     otherwise -> printf $ "INVALID COMMAND \n" ++ (show command)
-    where command = words s
-evalraw _ _ _ s = printf "Received unknown message %s\n" s
+    where command = T.words s
+evalraw _ _ _ s = T.putStrLn $ T.concat ["Received unknown message ", s, "\n"]
 
 -- Config -> Network -> Channel -> Handle -> sender -> message
-evalPrivMsg :: Config.Config -> Config.Network -> Config.Channel -> Handle -> String -> String -> IO ()
+evalPrivMsg :: Config.Config -> Config.Network -> Config.Channel -> Handle -> T.Text -> T.Text -> IO ()
 -- regular commands
 --evalPrivMsg _ _ chan h _  "!quit"    = write h "QUIT" ":Exiting" >> exitWith ExitSuccess
 evalPrivMsg _ _ chan h _  "!quit"    = privmsg h chan "Yeah... no. Shouldn't you be working instead of trying to mess with me?"
@@ -395,56 +400,56 @@ evalPrivMsg _ _ chan h _ "!help"    = privmsg h chan "Supported commands: !about
 evalPrivMsg _ _ chan h _ "!about"   = privmsg h chan "I'm indeed really awesome! Learn more about me in #neobot."
 evalPrivMsg _ _ chan h _ "!love"    = privmsg h chan "Haskell is love. Haskell is life."
 evalPrivMsg _ _ chan h _ "!gpl"     = privmsg h chan "RELEASE THE SOURCE ALREADY!!!1"
-evalPrivMsg _ _ chan h _ x | ("gpl gpl gpl" `isInfixOf` (map Char.toLower x) && (Config.channelReplyToCatchPhrases chan)) = privmsg h chan "RELEASE THE SOURCE ALREADY!!!1"
-evalPrivMsg _ _ chan h _ x | "!xkcd " `isPrefixOf` x = privmsg h chan $ "https://xkcd.com/" ++ (drop 6 x) -- TODO: Use https://xkcd.com/json.html to print the title!
+evalPrivMsg _ _ chan h _ x | ("gpl gpl gpl" `T.isInfixOf` (T.toLower x) && (Config.channelReplyToCatchPhrases chan)) = privmsg h chan "RELEASE THE SOURCE ALREADY!!!1"
+evalPrivMsg _ _ chan h _ x | "!xkcd " `T.isPrefixOf` x = privmsg h chan $ "https://xkcd.com/" `T.append` (T.drop 6 x) -- TODO: Use https://xkcd.com/json.html to print the title!
 
 -- K-pop handler
-evalPrivMsg config _ chan h _ "!kpop" = sendKPopVideo h chan (Config.configKPopVideos config)
-evalPrivMsg config _ chan h _ ('!':'k':'p':'o':'p':' ':filter_text) =
-    sendKPopVideo h chan $ filter (videoMatchesFilter $ T.pack $ map Char.toLower filter_text) $ Config.configKPopVideos config
+evalPrivMsg config _ chan h _ "!kpop" = sendRandomKPopVideo h chan (Config.configKPopVideos config)
+evalPrivMsg config _ chan h _ (T.stripPrefix "!kpop " -> Just filter_text) =
+    sendRandomKPopVideo h chan $ filter (videoMatchesFilter $ T.toLower filter_text) $ Config.configKPopVideos config
 
 -- !say with and without target channel
-evalPrivMsg _ network source_chan h _ x | "!say #" `isPrefixOf` x = case maybeChan of
-    Nothing -> privmsg h source_chan $ "I don't know the channel " ++ chan_name ++ "!"
+evalPrivMsg _ network source_chan h _ x | "!say #" `T.isPrefixOf` x = case maybeChan of
+    Nothing -> privmsg h source_chan $ T.concat ["I don't know the channel ", chan_name, "!"]
     Just chan -> privmsg h chan message
-    where chan_name = head $ tail $ words x
+    where chan_name = head $ tail $ T.words x
           maybeChan = lookup_channel_in_network network chan_name
-          message = unwords $ tail $ tail $ words x
-evalPrivMsg _ _ chan h _ x | "!say " `isPrefixOf` x = privmsg h chan (drop 5 x)
+          message = T.unwords $ tail $ tail $ T.words x
+evalPrivMsg _ _ chan h _ (T.stripPrefix "!say " -> Just x) = privmsg h chan x
 
-evalPrivMsg config network chan h _ x | "!issue " `isPrefixOf` x = getissue config network chan h (drop 7 x) -- TODO: Change getissue to return a printable value instead of making it write stuff
+evalPrivMsg config network chan h _ (T.stripPrefix "!issue " -> Just x) = getissue config network chan h x -- TODO: Change getissue to return a printable value instead of making it write stuff
 -- keyword recognition
-evalPrivMsg _ _ chan h _ x | isGreeting x && (Config.channelReplyToGreetings chan) = privmsg h chan $ "Hi! Welcome to " ++ (T.unpack $ Config.channelName chan) ++ ". Do you have a question on your mind? I'm just a bot, but lots of real people are hanging around here and may be able to help. Make sure to stick around for more than a few minutes to give them a chance to reply, though!"
-evalPrivMsg _ _ chan h _ x | ("msvcp" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "Got an MSVCP dll error? Download and install vc_redist.x64.exe from https://www.microsoft.com/en-us/download/details.aspx?id=48145 ."
-evalPrivMsg _ _ chan h _ x | ("0x0000007b" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "Got a 0x0000007b error when starting Citra? Don't download random .dll files from the internet! Undo your local modifications, and download and install vc_redist.x64.exe from https://www.microsoft.com/en-us/download/details.aspx?id=48145 instead."
+evalPrivMsg _ _ chan h _ x | isGreeting x && (Config.channelReplyToGreetings chan) = privmsg h chan $ T.concat ["Hi! Welcome to ", Config.channelName chan, ". Do you have a question on your mind? I'm just a bot, but lots of real people are hanging around here and may be able to help. Make sure to stick around for more than a few minutes to give them a chance to reply, though!"]
+evalPrivMsg _ _ chan h _ x | ("msvcp" `T.isInfixOf` (T.toLower x)) = privmsg h chan $ "Got an MSVCP dll error? Download and install vc_redist.x64.exe from https://www.microsoft.com/en-us/download/details.aspx?id=48145 ."
+evalPrivMsg _ _ chan h _ x | ("0x0000007b" `T.isInfixOf` (T.toLower x)) = privmsg h chan $ "Got a 0x0000007b error when starting Citra? Don't download random .dll files from the internet! Undo your local modifications, and download and install vc_redist.x64.exe from https://www.microsoft.com/en-us/download/details.aspx?id=48145 instead."
 -- TODO: Recognize /pull/ as part of a github url
 -- possibly offensive stuff
-evalPrivMsg _ _ chan h sender x | ("youtube.com/watch" `isInfixOf` (map Char.toLower x)) = (flip catch) ((\_ -> return ()) :: SomeException -> IO ()) $ do
+evalPrivMsg _ _ chan h sender x | ("youtube.com/watch" `T.isInfixOf` (T.toLower x)) = (flip catch) ((\_ -> return ()) :: SomeException -> IO ()) $ do
     contents <- Network.HTTP.Conduit.simpleHttp url
     when (("http://www.youtube.com/user/pcmaker2") `isInfixOf` (wordToChar $ L.unpack contents)) $ do
-        write h "KICK" $ chan_name ++ " " ++ sender ++ " :Nope, no advertisement of YouTube channels that regularly post prerelease stuff here."
+        write h "KICK" $ T.concat [chan_name, " ", sender, " :Nope, no advertisement of YouTube channels that regularly post prerelease stuff here."]
     where
-        url = head $ filter (("youtube.com/watch" `isInfixOf`). map Char.toLower) $ words x
+        url = T.unpack $ head $ filter (("youtube.com/watch" `T.isInfixOf`). T.toLower) $ T.words x
         wordToChar = map (\c -> (toEnum (fromEnum c) :: Char))
-        chan_name = T.unpack $ Config.channelName chan
+        chan_name = Config.channelName chan
 
-evalPrivMsg _ _ chan h _ x | ("emucr" `isInfixOf` (map Char.toLower x)) && (Config.channelReplyToCatchPhrases chan) = privmsg h chan $ "Please don't support emucr by downloading our (or any, really) software from emucr."
-evalPrivMsg _ _ chan h _ x | ("pokemon" `isInfixOf` (map Char.toLower x)) && ("?" `isInfixOf` (map Char.toLower x)) && (Config.channelReplyToCatchPhrases chan) = privmsg h chan $ "No, we won't help you emulating Pokémon."
-evalPrivMsg _ _ chan h _ x | (" rom " `isInfixOf` (map Char.toLower x)) && (Config.channelReplyToCatchPhrases chan) && (" download" `isInfixOf` (map Char.toLower x)) = privmsg h chan $ "We don't support piracy here."
-evalPrivMsg _ _ chan h _ x | (" support " `isInfixOf` (map Char.toLower x)) && (" android " `isInfixOf` (map Char.toLower x)) && (Config.channelReplyToCatchPhrases chan) = privmsg h chan $ "Android support is far from being a priority, currently."
-evalPrivMsg _ _ chan h _ x | ("3dmoo" `isInfixOf` (map Char.toLower x)) && (Config.channelReplyToCatchPhrases chan) = privmsg h chan $ "3dmoo, hah. Good one!"
-evalPrivMsg _ _ chan h _ x | ("tronds" `isInfixOf` (map Char.toLower x)) && (Config.channelReplyToCatchPhrases chan) = privmsg h chan $ "TronDS is a very successful 3DS emulator, indeed. Happy Opposite Day!"
-evalPrivMsg _ _ chan h _ x = printf "> %s" $ "Ignoring message \"" ++ x ++ "\" from channel " ++ (T.unpack $ Config.channelName chan) ++ "\n"
+evalPrivMsg _ _ chan h _ x | ("emucr" `T.isInfixOf` (T.toLower x)) && (Config.channelReplyToCatchPhrases chan) = privmsg h chan $ "Please don't support emucr by downloading our (or any, really) software from emucr."
+evalPrivMsg _ _ chan h _ x | ("pokemon" `T.isInfixOf` (T.toLower x)) && ("?" `T.isInfixOf` (T.toLower x)) && (Config.channelReplyToCatchPhrases chan) = privmsg h chan $ "No, we won't help you emulating Pokémon."
+evalPrivMsg _ _ chan h _ x | (" rom " `T.isInfixOf` (T.toLower x)) && (Config.channelReplyToCatchPhrases chan) && (" download" `T.isInfixOf` (T.toLower x)) = privmsg h chan $ "We don't support piracy here."
+evalPrivMsg _ _ chan h _ x | (" support " `T.isInfixOf` (T.toLower x)) && (" android " `T.isInfixOf` (T.toLower x)) && (Config.channelReplyToCatchPhrases chan) = privmsg h chan $ "Android support is far from being a priority, currently."
+evalPrivMsg _ _ chan h _ x | ("3dmoo" `T.isInfixOf` (T.toLower x)) && (Config.channelReplyToCatchPhrases chan) = privmsg h chan $ "3dmoo, hah. Good one!"
+evalPrivMsg _ _ chan h _ x | ("tronds" `T.isInfixOf` (T.toLower x)) && (Config.channelReplyToCatchPhrases chan) = privmsg h chan $ "TronDS is a very successful 3DS emulator, indeed. Happy Opposite Day!"
+evalPrivMsg _ _ chan h _ x = T.putStrLn $ T.concat ["> ", T.concat ["Ignoring message \"", x, "\" from channel ", Config.channelName chan, "\n"]]
 
-isGreeting :: String -> Bool
-isGreeting s = (map Char.toLower s) =~ "^(hello|hey|hi|helo|helllo|anyone?|anyone here|anybody here|nobody|help|h+e+l+o+)"
+isGreeting :: T.Text -> Bool
+isGreeting s = (T.unpack $ T.toLower s) =~ ("^(hello|hey|hi|helo|helllo|anyone?|anyone here|anybody here|nobody|help|h+e+l+o+)" :: String)
 
-myreadMaybe :: Read a => String -> Maybe a
-myreadMaybe s = case reads s of
+myreadMaybe :: Read a => T.Text -> Maybe a
+myreadMaybe s = case reads (T.unpack s) of
                   [(val, "")] -> Just val
                   _           -> Nothing
 
-getissue :: Config.Config -> Config.Network -> Config.Channel -> Handle -> String -> IO ()
+getissue :: Config.Config -> Config.Network -> Config.Channel -> Handle -> T.Text -> IO ()
 getissue config network channel h x =
     case maybeIssueNum of
         Nothing -> privmsg h channel $ "That is not a valid issue number."
@@ -452,8 +457,8 @@ getissue config network channel h x =
             do
                 possibleIssue <- GHAPI.issue' auth repo_owner repo_name issueNum
                 case possibleIssue of
-                    (Left err) -> privmsg h channel $ "Error: " ++ show err
-                    (Right issue) -> privmsg h channel $ "Issue " ++ show issueNum ++ ", reported by " ++ (GHAPI.githubOwnerLogin (GHAPI.issueUser issue)) ++ ": " ++ (GHAPI.issueTitle issue)
+                    (Left err) -> privmsg h channel $ "Error: " `mappend` (T.show err)
+                    (Right issue) -> privmsg h channel $ T.concat ["Issue ", T.show issueNum, ", reported by ", T.pack $ GHAPI.githubOwnerLogin (GHAPI.issueUser issue), ": ", T.pack $ GHAPI.issueTitle issue]
 
     where maybeIssueNum = myreadMaybe x :: Maybe Int
           repo_owner = T.unpack $ Config.watchedRepoOwner $ head $ Config.channelWatchedGithubRepos channel -- TODO: This is unsafe!
@@ -461,9 +466,9 @@ getissue config network channel h x =
           auth = Just $ GHAPI.GithubOAuth $ T.unpack $ Config.configAuthToken config
 
 -- TODO: Change to "Channel -> Handle -> String -> IO ()" for consistency!
-privmsg :: Handle -> Config.Channel -> String -> IO ()
-privmsg h chan s = write h "PRIVMSG" (chan_name ++ " :" ++ s)
-    where chan_name = T.unpack $ Config.channelName chan
+privmsg :: Handle -> Config.Channel -> T.Text -> IO ()
+privmsg h chan s = write h "PRIVMSG" $ T.concat [chan_name, " :", s]
+    where chan_name = Config.channelName chan
 
 rollIntInRange :: Int -> Int -> IO Int
 rollIntInRange min max = R.getStdRandom (R.randomR (min, max))
@@ -474,18 +479,24 @@ getRandomElement list = do
     return $ list !! index
 
 makeVideoString :: Config.KPopVideo -> T.Text
-makeVideoString video = T.concat [artist, T.pack " - \"", title, T.pack "\": ", url]
+makeVideoString video = T.concat [artist, " - \"", title, "\": ", url]
     where
         artist = Config.kpopvideoArtist video
         title = Config.kpopvideoTitle video
         url = Config.kpopvideoUrl video
 
+-- TODO: This currently also searched the URL for the given text, which is not what we want!
 videoMatchesFilter :: T.Text -> Config.KPopVideo -> Bool
 videoMatchesFilter filter_text video = T.isInfixOf filter_text $ T.toLower $ makeVideoString video
 
 -- Send a randomly selected video from the given list to the given channel
-sendKPopVideo :: Handle -> Config.Channel -> [Config.KPopVideo] -> IO ()
-sendKPopVideo h chan [] = privmsg h chan "No videos found!"
-sendKPopVideo h chan videos = do
+sendKPopVideo :: Handle -> Config.Channel -> Config.KPopVideo -> IO ()
+sendKPopVideo h chan video = do
+    T.putStrLn $ makeVideoString video
+    privmsg h chan $ makeVideoString video
+
+sendRandomKPopVideo :: Handle -> Config.Channel -> [Config.KPopVideo] -> IO ()
+sendRandomKPopVideo h chan [] = privmsg h chan "No videos found!"
+sendRandomKPopVideo h chan videos = do
     video <- getRandomElement videos
-    privmsg h chan $ T.unpack $ makeVideoString video
+    sendKPopVideo h chan video

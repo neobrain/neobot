@@ -12,15 +12,14 @@ module Config
 
 import Control.Applicative ((<$>), (<*>), pure, (<|>))
 import Data.Aeson (Value (..), FromJSON (..), (.:), (.:?), (.!=), Object, eitherDecode)
+import Data.Text.Lazy.Encoding as T (encodeUtf8)
 import Data.Text (Text)
+import Data.Text.Lazy.IO as T (readFile)
 
 import GHC.Generics (Generic) -- used to automatically create instances of Hashable
 import Data.Hashable -- (Hashable)
 
 import System.IO (withFile, IOMode(ReadMode), hGetContents)
-
---import qualified Data.ByteString.Char8 as B
-import qualified Data.ByteString.Lazy.Char8 as B
 
 
 data Config = Config
@@ -107,8 +106,8 @@ instance Hashable KPopVideo
 -- Mapping filename to IO action returning a Config object
 readConfig :: String -> IO (Maybe Config)
 readConfig filename = do
-                        json <- readFile filename
-                        dec <- return ((eitherDecode $ B.pack json) :: (Either String Config)) -- TODO: Clean this up!
+                        json <- T.readFile filename
+                        let dec = eitherDecode $ T.encodeUtf8 json
                         case dec of
                             Left err -> putStrLn err >> return Nothing
                             Right config -> return $ Just config
