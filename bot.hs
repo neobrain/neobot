@@ -397,8 +397,11 @@ evalPrivMsg _ _ chan h _ "!love"    = privmsg h chan "Haskell is love. Haskell i
 evalPrivMsg _ _ chan h _ "!gpl"     = privmsg h chan "RELEASE THE SOURCE ALREADY!!!1"
 evalPrivMsg _ _ chan h _ x | ("gpl gpl gpl" `isInfixOf` (map Char.toLower x) && (Config.channelReplyToCatchPhrases chan)) = privmsg h chan "RELEASE THE SOURCE ALREADY!!!1"
 evalPrivMsg _ _ chan h _ x | "!xkcd " `isPrefixOf` x = privmsg h chan $ "https://xkcd.com/" ++ (drop 6 x) -- TODO: Use https://xkcd.com/json.html to print the title!
+
+-- K-pop handler
 evalPrivMsg config _ chan h _ "!kpop" = sendKPopVideo h chan (Config.configKPopVideos config)
-evalPrivMsg config _ chan h _ x | "!kpop " `isPrefixOf` x = sendKPopVideo h chan (Config.configKPopVideos config) -- TODO: Only pass videos that contain the given string
+evalPrivMsg config _ chan h _ ('!':'k':'p':'o':'p':' ':filter_text) =
+    sendKPopVideo h chan $ filter (videoMatchesFilter $ T.pack $ map Char.toLower filter_text) $ Config.configKPopVideos config
 
 -- !say with and without target channel
 evalPrivMsg _ network source_chan h _ x | "!say #" `isPrefixOf` x = case maybeChan of
@@ -470,12 +473,19 @@ getRandomElement list = do
     index <- rollIntInRange 0 (length $ tail list)
     return $ list !! index
 
--- Send a randomly selected video from the given list to the given channel
-sendKPopVideo :: Handle -> Config.Channel -> [Config.KPopVideo] -> IO ()
-sendKPopVideo h chan videos = do
-    video <- getRandomElement videos --  TODO: Create sublist of videos matching any of the given keywords
-    let
+makeVideoString :: Config.KPopVideo -> T.Text
+makeVideoString video = T.concat [artist, T.pack " - \"", title, T.pack "\": ", url]
+    where
         artist = Config.kpopvideoArtist video
         title = Config.kpopvideoTitle video
         url = Config.kpopvideoUrl video
-    privmsg h chan $ T.unpack $ T.concat [artist, T.pack " - \"", title, T.pack "\": ", url]
+
+videoMatchesFilter :: T.Text -> Config.KPopVideo -> Bool
+videoMatchesFilter filter_text video = T.isInfixOf filter_text $ T.toLower $ makeVideoString video
+
+-- Send a randomly selected video from the given list to the given channel
+sendKPopVideo :: Handle -> Config.Channel -> [Config.KPopVideo] -> IO ()
+sendKPopVideo h chan [] = privmsg h chan "No videos found!"
+sendKPopVideo h chan videos = do
+    video <- getRandomElement videos
+    privmsg h chan $ T.unpack $ makeVideoString video
