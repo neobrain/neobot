@@ -44,11 +44,21 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy as L
 
+import Data.List
+import Data.List.Split
+
 import qualified System.Random as R
 
 import Network.HTTP.Conduit
 
 import Text.Regex.Posix
+
+-- Mediawiki stuff for querying wikis
+import qualified MediaWiki.API.Base as MW
+import qualified MediaWiki.API.Types as MW ( PageTitle(..) )
+import qualified MediaWiki.API as MW
+import qualified MediaWiki.API.Query.Search.Import as MW
+
 
 data SignalData = SignalGithub Github.Payload | SignalReload
 
@@ -400,12 +410,28 @@ evalPrivMsg :: Config.Config -> Config.Network -> Config.Channel -> Handle -> T.
 --evalPrivMsg _ _ chan h _  "!quit"    = write h "QUIT" ":Exiting" >> exitWith ExitSuccess
 evalPrivMsg _ _ chan h _  "!quit"    = privmsg h chan "Yeah... no. Shouldn't you be working instead of trying to mess with me?"
 --evalPrivMsg _ _ chan h _ x | "!quit " `isPrefixOf` x   = write h ("QUIT" ": Exiting (" ++ (drop 6 x) ++ ")") >> exitWith ExitSuccess
-evalPrivMsg _ _ chan h _ "!help"    = privmsg h chan "Supported commands: !about, !gpl, !help, !issue N, !kpop, !love, !say, !xkcd"
+evalPrivMsg _ _ chan h _ "!help"    = privmsg h chan "Supported commands: !3dbrew, !about, !gpl, !help, !issue N, !kpop, !love, !say, !xkcd"
 evalPrivMsg _ _ chan h _ "!about"   = privmsg h chan "I'm indeed really awesome! Learn more about me in #neobot."
 evalPrivMsg _ _ chan h _ "!love"    = privmsg h chan "Haskell is love. Haskell is life."
 evalPrivMsg _ _ chan h _ "!gpl"     = privmsg h chan "RELEASE THE SOURCE ALREADY!!!1"
 evalPrivMsg _ _ chan h _ x | ("gpl gpl gpl" `T.isInfixOf` (T.toLower x) && (Config.channelReplyToCatchPhrases chan)) = privmsg h chan "RELEASE THE SOURCE ALREADY!!!1"
 evalPrivMsg _ _ chan h _ x | "!xkcd " `T.isPrefixOf` x = privmsg h chan $ "https://xkcd.com/" `T.append` (T.drop 6 x) -- TODO: Use https://xkcd.com/json.html to print the title!
+
+evalPrivMsg _ _ chan h _ (T.stripPrefix "!3dbrew " -> Just search_term) = do
+    mb <- MW.webGetXml MW.stringXml "http://www.3dbrew.org/w/" req -- TODO: Make the wiki url configurable
+    case mb of
+        Just response | not $ null $ MW.srPages response -> do
+            let matches = MW.srPages response
+                num_matches = length matches
+                match_links = map (\x -> T.pack . ("https://www.3dbrew.org/wiki/" ++) . (intercalate "_") . splitOn " " . MW.pgTitle $ x) matches
+                reply_prefix = (if num_matches == max_results then "First " else "") `T.append` (T.show num_matches) `T.append` " search results on 3dbrew: "
+                reply = reply_prefix `T.append` (T.intercalate ", " match_links)
+            privmsg h chan reply
+        _ -> privmsg h chan "No matching 3dbrew pages found!"
+    where max_results = 3
+          search_request = MW.SearchRequest { MW.srSearch = T.unpack search_term, MW.srNamespaces = [], MW.srWhat = False, MW.srRedirects = True, MW.srOffset = Nothing, MW.srLimit = Just (max_results) }
+          req = MW.emptyXmlRequest (MW.mkQueryAction (MW.queryPage "") search_request)
+
 
 -- K-pop handler
 evalPrivMsg config _ chan h _ "!kpop" = sendRandomKPopVideo h chan (Config.configKPopVideos config)
