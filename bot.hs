@@ -131,8 +131,9 @@ controlThread oldconfig connections = do
                          list_new_conns <- forM added_servers (\network -> do
                                                                let ircnetwork = ircNetworkFromConfig network
                                                                    channels = map Config.channelName $ Config.networkChannels network
+                                                                   charset = Config.networkCharset network
                                                                putStrLn $ "Connecting to .. " ++ show ircnetwork
-                                                               h <- connectToIrcNetwork ircnetwork
+                                                               h <- connectToIrcNetwork ircnetwork charset
                                                                forM channels $ joinIrcChan h
                                                                return (ircnetwork,h))
 
@@ -178,11 +179,13 @@ controlThread oldconfig connections = do
                          andPred pred1 pred2 = \inp -> (pred1 inp) && (pred2 inp)
 
 -- Connect to the given IRC network
-connectToIrcNetwork :: IRCNetwork -> IO Handle
-connectToIrcNetwork (server,port) = do
+connectToIrcNetwork :: IRCNetwork -> Config.TextEnc -> IO Handle
+connectToIrcNetwork (server,port) charset = do
     h <- connectTo (T.unpack server) (PortNumber (fromIntegral port))
+    hSetEncoding h $ case charset of
+            Config.Utf8 -> utf8
+            Config.Char8 -> char8
     hSetBuffering h NoBuffering
-    hSetEncoding h utf8
     return h
 
 -- Disconnect from the given IRC network

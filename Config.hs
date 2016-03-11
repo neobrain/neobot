@@ -6,6 +6,7 @@ module Config
     , Config(..)
     , Network(..)
     , KPopVideo(..)
+    , TextEnc(..)
     , Channel(..)
     , WatchedRepo(..)
     ) where
@@ -43,6 +44,7 @@ data Network = Network
     , networkPort :: Int
     , networkNick :: Text
     , networkChannels :: [Channel]
+    , networkCharset :: TextEnc
     } deriving (Show, Eq, Generic)
 
 instance FromJSON Network where
@@ -52,6 +54,7 @@ instance FromJSON Network where
                 <*> v .: "port"
                 <*> v .: "nick"
                 <*> v .: "channels"
+                <*> (textEncodingFromString <$> (v .:? "charset" .!= "utf8"))
     parseJSON _ = fail "Network must be an object"
 
 instance Hashable Network
@@ -103,7 +106,15 @@ instance FromJSON KPopVideo where
 
 instance Hashable KPopVideo
 
--- Mapping filename to IO action returning a Config object
+data TextEnc = Utf8 | Char8
+    deriving (Show,Eq,Generic)
+
+instance Hashable TextEnc
+
+textEncodingFromString :: Text -> TextEnc
+textEncodingFromString "utf8" = Utf8
+textEncodingFromString "char8" = Char8
+
 readConfig :: String -> IO (Maybe Config)
 readConfig filename = do
                         json <- T.readFile filename
