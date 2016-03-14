@@ -1,0 +1,51 @@
+name:                neobot
+version:             0.1.0.0
+synopsis:            A cool IRC bot
+description:         A cool IRC bot
+homepage:            https://github.com/neobrain/neobot
+license:             BSD3
+license-file:        LICENSE
+author:              Tony Wasserka
+maintainer:          neobrainx@gmail.com
+copyright:           2016 Tony Wasserka
+build-type:          Simple
+extra-source-files:
+  app/Config.hs,
+  app/Ghhooks.hs
+cabal-version:       >=1.10
+
+executable neobot-exe
+  hs-source-dirs:      app
+  main-is:             bot.hs
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  build-depends:       base,
+                       aeson >= 0.11.0.0,
+                       async,
+                       basic-prelude,
+                       blaze-builder,
+                       bytestring,
+                       containers,
+                       either,
+                       github == 0.13.2,
+                       github-post-receive,
+                       hashable,
+                       heist,
+                       http-conduit,
+                       http-types,
+                       lens,
+                       mediawiki,
+                       network,
+                       random,
+                       regex-posix,
+                       split,
+                       stm,
+                       text,
+                       unordered-containers,
+                       wai,
+                       wai-logger,
+                       warp
+  default-language:    Haskell2010
+
+source-repository head
+  type:     git
+  location: https://github.com/neobrain/neobot

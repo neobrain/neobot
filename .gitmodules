@@ -1,6 +1,0 @@
-[submodule "github-post-receive"]
-	path = github-post-receive
-	url = https://github.com/neobrain/github-post-receive.git
-[submodule "aeson"]
-	path = aeson
-	url = https://github.com/neobrain/aeson.git

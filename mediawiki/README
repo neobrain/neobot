@@ -1,0 +1,37 @@
+= mediawiki - Accessing MediaWiki from Haskell =
+
+'mediawiki' is a Haskell package providing a comprehensive binding to
+the programmatic interface to MediaWiki (aka, 'the MediaWiki API') -
+
+  http://www.mediawiki.org/wiki/API
+
+The binding is allegedly complete (2008-11-17), letting you write
+applications in Haskell that accesses and (if enabled by target Wiki)
+manipulate content on MediaWiki pages.
+
+= Getting started =
+
+For some code samples showing you how to get started using this
+API binding, have a look in the examples/ directory. 
+
+= Building and installing =
+
+This package is provided in Cabal form, so only thing you need to
+do to get going is:
+
+  foo% runghc Setup configure
+  foo% runghc Setup build 
+  foo% runghc Setup install
+
+The package depends on a bunch of other packages though, so you
+need to have them built&installed, as well. They are:
+
+  * HTTP: http://hackage.haskell.org/cgi-bin/hackage-scripts/package/HTTP
+  * xml: http://hackage.haskell.org/cgi-bin/hackage-scripts/package/xml
+  * mime: http://hackage.haskell.org/cgi-bin/hackage-scripts/package/mime
+  * utf8-string: http://hackage.haskell.org/cgi-bin/hackage-scripts/package/utf8-string
+
+= Feedback / question =
+
+Please send them to sof@forkIO.com , and I'll try to respond to them
+as best/quickly as possible.
