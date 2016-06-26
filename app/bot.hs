@@ -18,6 +18,7 @@ import Github.Issues as GHAPI
 import Github.Issues.Comments as GHAPI
 
 import Data.Text.Encoding (encodeUtf8)
+import Data.Text.Encoding.Error (UnicodeException(DecodeError))
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import qualified Data.Text.Read as T
@@ -195,6 +196,7 @@ connectToIrcNetwork (server,port) charset = do
     hSetEncoding h $ case charset of
             Config.Utf8 -> utf8
             Config.Char8 -> char8
+    hSetNewlineMode h $ NewlineMode { inputNL = nativeNewline, outputNL = CRLF }
     hSetBuffering h NoBuffering
     return h
 
@@ -236,18 +238,29 @@ write h s t = do
 listen :: TChan SignalData -> Handle -> IO (Either SignalData T.Text)
 listen controlChan h = do
     -- Concurrently wait for an external signal or an IRC message to be ready
-    ret <- race (atomically $ peekTChan controlChan) (hWaitForInput h (-1))
+    ret <- race (atomically $ peekTChan controlChan) (try $ hWaitForInput h (-1))
     case ret of
         -- consume data and process it (repeat if the data is not actually valid)
         Left _ -> do
             signal <- atomically $ readTChan controlChan
             return $ Left signal
-        Right hasInput ->
+        Right (Right hasInput) ->
             if hasInput
                 then do
                     input <- T.hGetLine h
                     return $ Right input
                 else listen controlChan h
+        Right (Left (DecodeError _ _)) -> do
+            -- Switch encoding to raw bytes and skip the input line, then go back to listening
+            (Just old_enc) <- hGetEncoding h -- Returns nothing for binary mode, which we are not using!
+            hSetEncoding h char8
+            hGetLine h
+            hSetEncoding h old_enc
+            listen controlChan h
+        Right (Left some_exc) ->
+            -- This may be an EOF error. We should sleep for a few seconds and then attempt to reconnect to the server here!
+            -- For now, we just rethrow the exception
+            throw some_exc
 
 -- Listen for any kind of event which might be relevant for this IRC session
 eventLoop :: Config.Config -> Config.Network -> TChan SignalData -> Handle -> IO (IrcThreadQuitReason)
