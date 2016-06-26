@@ -416,8 +416,6 @@ evalPrivMsg _ _ chan h _ "!love"    = privmsg h chan "Haskell is love. Haskell i
 evalPrivMsg _ _ chan h _ "!gpl"     = privmsg h chan "RELEASE THE SOURCE ALREADY!!!1"
 evalPrivMsg _ _ chan h _ x | ("gpl gpl gpl" `T.isInfixOf` (T.toLower x) && (Config.channelReplyToCatchPhrases chan)) = privmsg h chan "RELEASE THE SOURCE ALREADY!!!1"
 evalPrivMsg _ _ chan h _ x | "!xkcd " `T.isPrefixOf` x = privmsg h chan $ "https://xkcd.com/" `T.append` (T.drop 6 x) -- TODO: Use https://xkcd.com/json.html to print the title!
-
--- Added By HyperGainZ (NicolaiVdS)
 evalPrivMsg _ _ chan h _ "!games"   = privmsg h chan "Here is a list of games that are tested with nightly builds: http://tinyurl.com/citra-games, you can add your own game tests in the Public Editing tab (only post test made on the nightly builds)."
 
 evalPrivMsg _ _ chan h _ (T.stripPrefix "!3dbrew " -> Just search_term) = do
