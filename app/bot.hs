@@ -477,7 +477,6 @@ evalPrivMsg _ _ chan h sender x | ("youtube.com/watch" `T.isInfixOf` (T.toLower 
         chan_name = Config.channelName chan
 
 evalPrivMsg _ _ chan h _ x | ("emucr" `T.isInfixOf` (T.toLower x)) && (Config.channelReplyToCatchPhrases chan) = privmsg h chan $ "Please don't support emucr by downloading our (or any, really) software from emucr."
-evalPrivMsg _ _ chan h _ x | ("pokemon" `T.isInfixOf` (T.toLower x)) && ("?" `T.isInfixOf` (T.toLower x)) && (Config.channelReplyToCatchPhrases chan) = privmsg h chan $ "No, we won't help you emulating Pokémon."
 evalPrivMsg _ _ chan h _ x | (" rom " `T.isInfixOf` (T.toLower x)) && (Config.channelReplyToCatchPhrases chan) && (" download" `T.isInfixOf` (T.toLower x)) = privmsg h chan $ "We don't support piracy here."
 evalPrivMsg _ _ chan h _ x | (" support " `T.isInfixOf` (T.toLower x)) && (" android " `T.isInfixOf` (T.toLower x)) && (Config.channelReplyToCatchPhrases chan) = privmsg h chan $ "Android support is far from being a priority, currently."
 evalPrivMsg _ _ chan h _ x | ("3dmoo" `T.isInfixOf` (T.toLower x)) && (Config.channelReplyToCatchPhrases chan) = privmsg h chan $ "3dmoo, hah. Good one!"
