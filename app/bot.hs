@@ -423,12 +423,13 @@ evalPrivMsg :: Config.Config -> Config.Network -> Config.Channel -> Handle -> T.
 --evalPrivMsg _ _ chan h _  "!quit"    = write h "QUIT" ":Exiting" >> exitWith ExitSuccess
 evalPrivMsg _ _ chan h _  "!quit"    = privmsg h chan "Yeah... no. Shouldn't you be working instead of trying to mess with me?"
 --evalPrivMsg _ _ chan h _ x | "!quit " `isPrefixOf` x   = write h ("QUIT" ": Exiting (" ++ (drop 6 x) ++ ")") >> exitWith ExitSuccess
-evalPrivMsg _ _ chan h _ "!help"    = privmsg h chan "Supported commands: !3dbrew, !about, !gpl, !help, !issue N, !kpop, !love, !say, !xkcd"
+evalPrivMsg _ _ chan h _ "!help"    = privmsg h chan "Supported commands: !3dbrew, !about, !gpl, !help, !issue N, !kpop, !love, !say, !xkcd, !games"
 evalPrivMsg _ _ chan h _ "!about"   = privmsg h chan "I'm indeed really awesome! Learn more about me in #neobot."
 evalPrivMsg _ _ chan h _ "!love"    = privmsg h chan "Haskell is love. Haskell is life."
 evalPrivMsg _ _ chan h _ "!gpl"     = privmsg h chan "RELEASE THE SOURCE ALREADY!!!1"
 evalPrivMsg _ _ chan h _ x | ("gpl gpl gpl" `T.isInfixOf` (T.toLower x) && (Config.channelReplyToCatchPhrases chan)) = privmsg h chan "RELEASE THE SOURCE ALREADY!!!1"
 evalPrivMsg _ _ chan h _ x | "!xkcd " `T.isPrefixOf` x = privmsg h chan $ "https://xkcd.com/" `T.append` (T.drop 6 x) -- TODO: Use https://xkcd.com/json.html to print the title!
+evalPrivMsg _ _ chan h _ "!games"   = privmsg h chan "Here is a list of games that are tested with nightly builds: http://tinyurl.com/citra-games, you can add your own game tests in the Public Editing tab (only post test made on the nightly builds)." -- TODO: add check if channel is citra
 
 evalPrivMsg _ _ chan h _ (T.stripPrefix "!3dbrew " -> Just search_term) = do
     mb <- MW.webGetXml MW.stringXml "http://www.3dbrew.org/w/" req -- TODO: Make the wiki url configurable
