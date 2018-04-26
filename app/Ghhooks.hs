@@ -16,7 +16,7 @@ import Network.Wai
     ( requestBody, strictRequestBody, responseLBS, Application
     , rawPathInfo, requestMethod, requestHeaders, responseStream
     )
-import Network.Wai.Handler.Warp (run, Port)
+import Network.Wai.Handler.Warp (runSettings, setPort, setHost, defaultSettings, Port)
 import Network.Wai.Logger (withStdoutLogger, ApacheLogger)
 
 import Control.Monad.Trans.Either (runEitherT)
@@ -38,7 +38,8 @@ import Github.PostReceive.Types --(Payload)
 start :: Port -> M.Map B.ByteString (Payload -> IO ()) -> IO ()
 start port routes = do
     putStrLn startingMessage
-    withStdoutLogger $ run port . flip app routes
+    -- withStdoutLogger $ run port . flip app routes
+    withStdoutLogger $ runSettings (setHost "!4" $ setPort port defaultSettings) . flip app routes
   where
     startingMessage = concat
         [ "github-post-receive listening on port "
@@ -47,31 +48,57 @@ start port routes = do
         , show $ M.keys routes
         ]
 
+-- foo = "menu" ## testSplice
+--   where testSplice = do
+--                        --return $ C.yieldRuntimeText $ do return "<h1>"
+--                        let stuff = C.yieldRuntimeText $ (do return $ Data.Text.pack ("<div class=\"pure-u-4-24\">\r\n" ++
+--                                                                                      "    <div id=\"nav\" class=\"pure-u\"> \r\n" ++
+--                                                                                      "            <a href=\"#\" class=\"pure-menu-heading\">MY STUFF</a>\r\n" ++
+--                                                                                      "            <div class=\"nav-inner\">\r\n" ++
+--                                                                                      "                <div class=\"pure-menu\">\r\n" ++
+--                                                                                      "                    <ul class=\"pure-menu-list\">\r\n" ++
+--                                                                                      "                        <li class=\"pure-menu-item\"><a href=\"#\" class=\"pure-menu-link\">About</a></li>\r\n" ++
+--                                                                                      "                        <li class=\"pure-menu-item\"><a href=\"#\" class=\"pure-menu-link\">Blog</a></li>\r\n" ++
+--                                                                                      "                        <li class=\"pure-menu-item\"><a href=\"#\" class=\"pure-menu-link\">Download</a></li>\r\n" ++
+--                                                                                      "                        <li class=\"pure-menu-item\"><a href=\"#\" class=\"pure-menu-link\">GitHub</a></li>\r\n" ++
+--                                                                                      "                        <li class=\"pure-menu-item\"><a href=\"#\" class=\"pure-menu-link\">Contact</a></li>\r\n" ++
+--                                                                                     "                    </ul>\r\n" ++
+--                                                                                      "                </div>\r\n" ++
+--                                                                                      "            </div>\r\n" ++
+--                                                                                      "        </div>\r\n" ++
+--                                                                                      "    </div>"))
+--                        let stuff2 = C.yieldRuntime $ do return ""
+--                        -- let stuff3 = C.runChildren
+--                        return $ mappend stuff stuff2 -- stuff2
+--                        -- C.runChildrenWith foo
+--                        -- C.runChildren
+--             -- return $ C.yieldRuntimeText $ do return "</h1>"
+
 foo = "menu" ## testSplice
   where testSplice = do
-                       --return $ C.yieldRuntimeText $ do return "<h1>"
-                       let stuff = C.yieldRuntimeText $ (do return $ Data.Text.pack ("<div class=\"pure-u-4-24\">\r\n" ++
-                                                                                     "    <div id=\"nav\" class=\"pure-u\"> \r\n" ++
-                                                                                     "            <a href=\"#\" class=\"pure-menu-heading\">MY STUFF</a>\r\n" ++
-                                                                                     "            <div class=\"nav-inner\">\r\n" ++
-                                                                                     "                <div class=\"pure-menu\">\r\n" ++
-                                                                                     "                    <ul class=\"pure-menu-list\">\r\n" ++
-                                                                                     "                        <li class=\"pure-menu-item\"><a href=\"#\" class=\"pure-menu-link\">About</a></li>\r\n" ++
-                                                                                     "                        <li class=\"pure-menu-item\"><a href=\"#\" class=\"pure-menu-link\">Blog</a></li>\r\n" ++
-                                                                                     "                        <li class=\"pure-menu-item\"><a href=\"#\" class=\"pure-menu-link\">Download</a></li>\r\n" ++
-                                                                                     "                        <li class=\"pure-menu-item\"><a href=\"#\" class=\"pure-menu-link\">GitHub</a></li>\r\n" ++
-                                                                                     "                        <li class=\"pure-menu-item\"><a href=\"#\" class=\"pure-menu-link\">Contact</a></li>\r\n" ++
-                                                                                     "                    </ul>\r\n" ++
-                                                                                     "                </div>\r\n" ++
-                                                                                     "            </div>\r\n" ++
-                                                                                     "        </div>\r\n" ++
-                                                                                     "    </div>"))
-                       let stuff2 = C.yieldRuntime $ do return ""
-                       -- let stuff3 = C.runChildren
-                       return $ mappend stuff stuff2 -- stuff2
-                       -- C.runChildrenWith foo
-                       -- C.runChildren
-            -- return $ C.yieldRuntimeText $ do return "</h1>"
+                        --return $ C.yieldRuntimeText $ do return "<h1>"
+                        let stuff = C.yieldRuntimeText $ (do return $ Data.Text.pack ("<div class=\"pure-u-4-24\">\r\n" ++
+                                                                                      "    <div id=\"nav\" class=\"pure-u\"> \r\n" ++
+                                                                                      "            <a href=\"#\" class=\"pure-menu-heading\">MY STUFF</a>\r\n" ++
+                                                                                      "            <div class=\"nav-inner\">\r\n" ++
+                                                                                      "                <div class=\"pure-menu\">\r\n" ++
+                                                                                      "                    <ul class=\"pure-menu-list\">\r\n" ++
+                                                                                      "                        <li class=\"pure-menu-item\"><a href=\"#\" class=\"pure-menu-link\">About</a></li>\r\n" ++
+                                                                                      "                        <li class=\"pure-menu-item\"><a href=\"#\" class=\"pure-menu-link\">Blog</a></li>\r\n" ++
+                                                                                      "                        <li class=\"pure-menu-item\"><a href=\"#\" class=\"pure-menu-link\">Download</a></li>\r\n" ++
+                                                                                      "                        <li class=\"pure-menu-item\"><a href=\"#\" class=\"pure-menu-link\">GitHub</a></li>\r\n" ++
+                                                                                      "                        <li class=\"pure-menu-item\"><a href=\"#\" class=\"pure-menu-link\">Contact</a></li>\r\n" ++
+                                                                                      "                    </ul>\r\n" ++
+                                                                                      "                </div>\r\n" ++
+                                                                                      "            </div>\r\n" ++
+                                                                                      "        </div>\r\n" ++
+                                                                                      "    </div>"))
+                        let stuff2 = C.yieldRuntime $ do return ""
+                        -- let stuff3 = C.runChildren
+                        return $ mappend stuff stuff2 -- stuff2
+                        -- C.runChildrenWith foo
+                        -- C.runChildren
+             -- return $ C.yieldRuntimeText $ do return "</h1>"
 
 heistConfig =
   (set hcNamespace "") $
